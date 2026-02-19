@@ -25,8 +25,7 @@ from collections import Counter
 import logging
 logger = logging.getLogger(__name__)
 from flask import Flask
-from complete_handler import setup_complete_handler, check_site_shopify_direct
-from enhanced_shopify_checker import check_site_shopify_full          
+from complete_handler import setup_complete_handler, check_site_shopify_direct         
 app = Flask(__name__)
 
 @app.route('/')
