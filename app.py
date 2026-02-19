@@ -963,7 +963,23 @@ def process_mass_check_txt(bot, message, ccs, filtered_sites, proxies_data, chec
 # ============================================================================
 # 7. FORMATTING FUNCTIONS
 # ============================================================================
-
+def format_single_result(cc, response, status, gate_name, bin_info, proxy_used):
+    emoji = status_emoji.get(status, '⚠️')
+    status_msg = status_text.get(status, 'Unknown')
+    proxy_status = "🔆" if proxy_used else "🚫"
+    return f"""
+┏━━━━━━━⍟
+┃ <b>{gate_name} Result</b> {emoji}
+┗━━━━━━━━━━━⊛
+💳 <b>Card:</b> <code>{cc}</code>
+💰 <b>Response:</b> {response}
+🔌 <b>Proxy:</b> {proxy_status}
+━━━━━━━━━━━━━━━━━━━
+<b>Info:</b> {bin_info.get('brand','')} {bin_info.get('type','')}
+{b'ank': {bin_info.get('bank','')}} {bin_info.get('country_flag','')}
+Owner :- @Unknown_bolte
+"""
+    
 def format_progress_update(processed, total, cooked, approved):
     """Format live progress update"""
     percent = (processed / total * 100) if total > 0 else 0
@@ -1009,6 +1025,7 @@ def format_final_results_txt(cooked, approved, declined, errors, timeouts, total
 [⌬] <b>𝐒𝐩𝐞𝐞𝐝</b>↣ {speed:.1f} checks/sec
 
 ━━━━━━━━━━━━━━━━━━━━
+Owner :- @Unknown_bolte
 """
 
 
@@ -1354,6 +1371,63 @@ def send_help(message):
 """.format(DARKS_ID=DARKS_ID)
     
     bot.reply_to(message, help_text, parse_mode='HTML')
+
+@bot.message_handler(commands=['bt'])
+def handle_braintree_single(message):
+    """Check a single card on the Braintree site."""
+    if not is_user_allowed(message.from_user.id):
+        bot.reply_to(message, "🚫 Access Denied.")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage: /bt CC|MM|YYYY|CVV")
+            return
+        cc = parts[1].strip()
+    except Exception as e:
+        bot.reply_to(message, f"Error parsing card: {e}")
+        return
+
+    # Send a "processing" message
+    status_msg = bot.reply_to(message, "⏳ Checking on Braintree...")
+
+    # Run the check (use a proxy if available)
+    proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
+    response_text, status = gates.check_braintree(cc, proxy)
+
+    # Format and send result
+    bin_info = get_bin_info(cc.split('|')[0])
+    msg = format_single_result(cc, response_text, status, "Braintree", bin_info, proxy)
+    bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+
+
+@bot.message_handler(commands=['st'])
+def handle_stripe_configdb_single(message):
+    """Check a single card on the ConfigDB Stripe site."""
+    if not is_user_allowed(message.from_user.id):
+        bot.reply_to(message, "🚫 Access Denied.")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage: /st CC|MM|YYYY|CVV")
+            return
+        cc = parts[1].strip()
+    except Exception as e:
+        bot.reply_to(message, f"Error parsing card: {e}")
+        return
+
+    status_msg = bot.reply_to(message, "⏳ Checking on ConfigDB Stripe...")
+
+    proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
+    response_text, status = gates.check_stripe_configdb(cc, proxy)
+
+    bin_info = get_bin_info(cc.split('|')[0])
+    msg = format_single_result(cc, response_text, status, "ConfigDB Stripe", bin_info, proxy)
+    bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+
 
 @bot.message_handler(commands=['owner'])
 @flood_control
