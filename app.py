@@ -41,7 +41,7 @@ def keep_alive():
     t = threading.Thread(target=run_web_server)
     t.start()
     
-BOT_TOKEN = "6521915796:AAHCFIh7fe7diCWRFRxdCYsMcbn_3pjZMwI"
+BOT_TOKEN = "8486005279:AAGLS527IbxbMRLx40wEdfoXaPJ7BfWddxw"
 
 OWNER_ID = [5963548505, 1614278744]
 DARKS_ID = 5963548505
