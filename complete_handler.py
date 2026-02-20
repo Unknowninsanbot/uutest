@@ -424,6 +424,31 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
+                              
+    @bot.callback_query_handler(func=lambda call: call.data == "run_mass_braintree_mass")
+    def callback_braintree_mass(call):
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            user_id = call.from_user.id
+            if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
+                bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
+                return
+
+            proxies = get_active_proxies(user_id)
+            if not proxies:
+                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
+                return
+
+            process_mass_gate_check(
+                bot, call.message,
+                user_sessions[user_id]['ccs'],
+                gates.check_braintree_mass,   # the new function
+                "Braintree Mass (bandc)",
+                proxies
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
+        
     @bot.callback_query_handler(func=lambda call: call.data == "action_cancel")
     def callback_cancel(call):
         try:
@@ -970,4 +995,5 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
         try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
 
         except: bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
