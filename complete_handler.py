@@ -9,7 +9,8 @@ import os
 import urllib3
 import traceback
 import json
-import gates  # our new gates.py
+import gates
+import user_agent
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from telebot import types
 import autosh
@@ -994,6 +995,7 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
         try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
 
         except: bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
 
