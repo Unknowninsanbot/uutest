@@ -1372,39 +1372,8 @@ def send_help(message):
     
     bot.reply_to(message, help_text, parse_mode='HTML')
 
-@bot.message_handler(commands=['bt'])
-def handle_braintree_single(message):
-    """Check a single card on the Braintree site."""
-    if not is_user_allowed(message.from_user.id):
-        bot.reply_to(message, "🚫 Access Denied.")
-        return
-
-    try:
-        parts = message.text.split(maxsplit=1)
-        if len(parts) < 2:
-            bot.reply_to(message, "Usage: /bt CC|MM|YYYY|CVV")
-            return
-        cc = parts[1].strip()
-    except Exception as e:
-        bot.reply_to(message, f"Error parsing card: {e}")
-        return
-
-    # Send a "processing" message
-    status_msg = bot.reply_to(message, "⏳ Checking on Braintree...")
-
-    # Run the check (use a proxy if available)
-    proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
-    response_text, status = gates.check_braintree(cc, proxy)
-
-    # Format and send result
-    bin_info = get_bin_info(cc.split('|')[0])
-    msg = format_single_result(cc, response_text, status, "Braintree", bin_info, proxy)
-    bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-
-
 @bot.message_handler(commands=['st'])
 def handle_stripe_configdb_single(message):
-    """Check a single card on the ConfigDB Stripe site."""
     if not is_user_allowed(message.from_user.id):
         bot.reply_to(message, "🚫 Access Denied.")
         return
@@ -1419,15 +1388,51 @@ def handle_stripe_configdb_single(message):
         bot.reply_to(message, f"Error parsing card: {e}")
         return
 
+    # Send a "processing" message
     status_msg = bot.reply_to(message, "⏳ Checking on ConfigDB Stripe...")
 
-    proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
-    response_text, status = gates.check_stripe_configdb(cc, proxy)
+    # Run the check in a separate thread
+    def check_and_update():
+        try:
+            proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
+            response_text, status = gates.check_stripe_configdb(cc, proxy)
+            bin_info = get_bin_info(cc.split('|')[0])
+            result_msg = format_single_result(cc, response_text, status, "ConfigDB Stripe", bin_info, proxy)
+            bot.edit_message_text(result_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+        except Exception as e:
+            bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, status_msg.message_id)
 
-    bin_info = get_bin_info(cc.split('|')[0])
-    msg = format_single_result(cc, response_text, status, "ConfigDB Stripe", bin_info, proxy)
-    bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+    threading.Thread(target=check_and_update).start()
 
+@bot.message_handler(commands=['bt'])
+def handle_braintree_single(message):
+    if not is_user_allowed(message.from_user.id):
+        bot.reply_to(message, "🚫 Access Denied.")
+        return
+
+    try:
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            bot.reply_to(message, "Usage: /bt CC|MM|YYYY|CVV")
+            return
+        cc = parts[1].strip()
+    except Exception as e:
+        bot.reply_to(message, f"Error parsing card: {e}")
+        return
+
+    status_msg = bot.reply_to(message, "⏳ Checking on Braintree...")
+
+    def check_and_update():
+        try:
+            proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
+            response_text, status = gates.check_braintree(cc, proxy)
+            bin_info = get_bin_info(cc.split('|')[0])
+            result_msg = format_single_result(cc, response_text, status, "Braintree", bin_info, proxy)
+            bot.edit_message_text(result_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+        except Exception as e:
+            bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, status_msg.message_id)
+
+    threading.Thread(target=check_and_update).start()
 
 @bot.message_handler(commands=['owner'])
 @flood_control
