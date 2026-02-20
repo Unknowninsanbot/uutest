@@ -967,6 +967,11 @@ def format_single_result(cc, response, status, gate_name, bin_info, proxy_used):
     emoji = status_emoji.get(status, '⚠️')
     status_msg = status_text.get(status, 'Unknown')
     proxy_status = "🔆" if proxy_used else "🚫"
+    
+    # If bin_info is None, provide defaults
+    if bin_info is None:
+        bin_info = {'brand': 'UNKNOWN', 'type': 'UNKNOWN', 'bank': 'UNKNOWN', 'country_flag': '🇺🇳'}
+    
     return f"""
 ┏━━━━━━━⍟
 ┃ <b>{gate_name} Result</b> {emoji}
@@ -976,7 +981,7 @@ def format_single_result(cc, response, status, gate_name, bin_info, proxy_used):
 🔌 <b>Proxy:</b> {proxy_status}
 ━━━━━━━━━━━━━━━━━━━
 <b>Info:</b> {bin_info.get('brand','')} {bin_info.get('type','')}
-{b'ank': {bin_info.get('bank','')}} {bin_info.get('country_flag','')}
+<b>Bank:</b> {bin_info.get('bank','')} {bin_info.get('country_flag','')}
 Owner :- @Unknown_bolte
 """
     
