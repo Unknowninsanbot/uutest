@@ -230,9 +230,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 markup = types.InlineKeyboardMarkup(row_width=1)
                 markup.add(
                     types.InlineKeyboardButton("🛍️ Shopify Mass (Multi-Site)", callback_data="run_mass_shopify"),
-                    types.InlineKeyboardButton("💳 Stripe Auth (ConfigDB)", callback_data="run_mass_stripe_configdb"),
-                    types.InlineKeyboardButton("💰 Braintree $50", callback_data="run_mass_braintree"),
                     types.InlineKeyboardButton("💳 Stripe Donation (Multi)", callback_data="run_mass_stripe_donation"),
+                    types.InlineKeyboardButton("💰 Braintree Auth (bandc)", callback_data="run_mass_braintree_mass"),
                     types.InlineKeyboardButton("❌ Cancel", callback_data="action_cancel")
                 )
 
@@ -995,5 +994,6 @@ def test_donation_site_like_script(site_url, pk, cc, proxy=None):
         try: bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
 
         except: bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
