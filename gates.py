@@ -241,6 +241,8 @@ def check_braintree(cc, proxy=None):
         if r.status_code != 200:
             return "Failed to get Braintree token", "ERROR"
         payload_encoded = r.json()['payload']['clientToken']
+        if isinstance(payload_encoded, bytes):     
+            payload_encoded = payload_encoded.decode('utf-8') 
         decoded = base64.urlsafe_b64decode(payload_encoded + '=' * (-len(payload_encoded) % 4)).decode('utf-8')
         auth_fingerprint = re.search(r'"authorizationFingerprint":"(.*?)"', decoded).group(1)
 
