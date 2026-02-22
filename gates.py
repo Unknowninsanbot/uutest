@@ -10,7 +10,6 @@ import logging
 from urllib.parse import urlparse
 from user_agent import generate_user_agent
 from requests_toolbelt.multipart.encoder import MultipartEncoder
-
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -438,6 +437,10 @@ def check_braintree_mass(cc, proxy=None):
     Braintree auth gate using bandc.com with retry on rate limit.
     Returns (response_text, status)
     """
+    import base64, random, string, time, uuid
+    from user_agent import generate_user_agent
+    from faker import Faker
+    
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -452,13 +455,9 @@ def check_braintree_mass(cc, proxy=None):
             # --- PROXY SETUP ---
             r = requests.Session()
             if proxy:
-                formatted = gates.format_proxy(proxy)
+                formatted = format_proxy(proxy)  # FIX: Removed 'gates.' prefix
                 if formatted:
                     r.proxies = formatted
-
-            import base64, random, string, time, uuid
-            from user_agent import generate_user_agent
-            from faker import Faker
 
             user = generate_user_agent()
 
@@ -705,3 +704,7 @@ def check_braintree_mass(cc, proxy=None):
             else:
                 return f"Error: {str(e)}", "ERROR"
     return "Max retries exceeded", "ERROR"
+
+            
+
+           
