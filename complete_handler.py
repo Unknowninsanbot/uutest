@@ -409,23 +409,23 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
 
     def process_mass_gate_check(bot, message, ccs, gate_func, gate_name, proxies):
-    total = len(ccs)
-    results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
+        total = len(ccs)
+        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
 
-    try:
-        status_msg = bot.send_message(
-            message.chat.id,
-            f"🔥 <b>{gate_name} Started...</b>\n"
-            f"💳 Cards: {total}\n"
-            f"🔌 Proxies: {len(proxies)}",
-            parse_mode='HTML'
-        )
-    except:
-        status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
+        try:
+            status_msg = bot.send_message(
+                message.chat.id,
+                f"🔥 <b>{gate_name} Started...</b>\n"
+                f"💳 Cards: {total}\n"
+                f"🔌 Proxies: {len(proxies)}",
+                parse_mode='HTML'
+            )
+        except:
+            status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
 
-    processed = 0
-    start_time = time.time()
-    last_update = time.time()
+        processed = 0
+        start_time = time.time()
+        last_update = time.time()
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {}
@@ -1072,5 +1072,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
