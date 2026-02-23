@@ -257,9 +257,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                     types.InlineKeyboardButton("🛍️ Shopify Mass (Multi-Site)", callback_data="run_mass_shopify"),
                     types.InlineKeyboardButton("💳 Stripe Donation (Multi)", callback_data="run_mass_stripe_donation"),
                     types.InlineKeyboardButton("💰 Braintree Auth (bandc)", callback_data="run_mass_braintree_mass"),
+                    types.InlineKeyboardButton("🔤 Duolingo Stripe Auth", callback_data="run_mass_duolingo_stripe"),   # <-- new button
                     types.InlineKeyboardButton("❌ Cancel", callback_data="action_cancel")
                 )
-
                 bot.edit_message_text(
                     f"📂 <b>File:</b> <code>{file_name}</code>\n"
                     f"💳 <b>Cards:</b> {len(ccs)}\n"
@@ -840,7 +840,29 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             )
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
+    @bot.callback_query_handler(func=lambda call: call.data == "run_mass_duolingo_stripe")
+    def callback_duolingo_stripe(call):
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            user_id = call.from_user.id
+            if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
+                bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
+                return
 
+            proxies = get_active_proxies(user_id)
+            if not proxies:
+                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
+                return
+
+            process_mass_gate_check(
+                bot, call.message,
+                user_sessions[user_id]['ccs'],
+                gates.check_duolingo_stripe,
+                "Duolingo Stripe Auth",
+                proxies
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
     @bot.callback_query_handler(func=lambda call: call.data == "action_cancel")
     def callback_cancel(call):
         try:
@@ -1050,4 +1072,5 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
