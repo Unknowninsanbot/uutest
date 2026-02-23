@@ -409,92 +409,114 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
 
     def process_mass_gate_check(bot, message, ccs, gate_func, gate_name, proxies):
-        total = len(ccs)
-        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
+    total = len(ccs)
+    results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
 
-        try:
-            status_msg = bot.send_message(
-                message.chat.id,
-                f"🔥 <b>{gate_name} Started...</b>\n"
-                f"💳 Cards: {total}\n"
-                f"🔌 Proxies: {len(proxies)}",
-                parse_mode='HTML'
-            )
-        except:
-            status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
-
-        processed = 0
-        start_time = time.time()
-        last_update = time.time()
-
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {}
-            for cc in ccs:
-                proxy = random.choice(proxies)
-                futures[executor.submit(gate_func, cc, proxy)] = cc
-
-            for future in as_completed(futures):
-                cc = futures[future]
-                processed += 1
-
-                try:
-                    response_text, status = future.result()
-
-                    res_obj = {
-                        'cc': cc,
-                        'response': response_text,
-                        'status': status,
-                        'gateway': gate_name,
-                        'price': 'N/A',
-                        'site_url': 'API'
-                    }
-
-                    if status == 'APPROVED':
-                        results['cooked'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"✅ {gate_name} HIT")
-                    elif status == 'APPROVED_OTP':
-                        results['approved'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"⚠️ {gate_name} AUTH")
-                    elif status == 'DECLINED':
-                        results['declined'].append(res_obj)
-                    else:
-                        results['error'].append(res_obj)
-
-                    if time.time() - last_update > 3:
-                        msg = (
-                            f"⚡ <b>{gate_name} Checking...</b>\n"
-                            f"{create_progress_bar(processed, total)}\n"
-                            f"<b>Progress:</b> {processed}/{total}\n"
-                            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-                            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-                            f"⚠️ <b>Error:</b> {len(results['error'])}"
-                        )
-                        try:
-                            bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-                            last_update = time.time()
-                        except:
-                            pass
-
-                except Exception as e:
-                    print(f"Check Error for {cc}: {e}")
-                    results['error'].append({'cc': cc, 'response': str(e), 'status': 'ERROR'})
-
-        duration = time.time() - start_time
-        final_msg = (
-            f"✅ <b>{gate_name} Completed</b>\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"💳 <b>Total:</b> {total}\n"
-            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-            f"⚠️ <b>Errors:</b> {len(results['error'])}\n"
-            f"⏱️ <b>Time:</b> {duration:.2f}s"
+    try:
+        status_msg = bot.send_message(
+            message.chat.id,
+            f"🔥 <b>{gate_name} Started...</b>\n"
+            f"💳 Cards: {total}\n"
+            f"🔌 Proxies: {len(proxies)}",
+            parse_mode='HTML'
         )
+    except:
+        status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
 
-        try:
-            bot.edit_message_text(final_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-        except:
-            bot.send_message(message.chat.id, final_msg, parse_mode='HTML')
+    processed = 0
+    start_time = time.time()
+    last_update = time.time()
 
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {}
+        for cc in ccs:
+            proxy = random.choice(proxies)
+            futures[executor.submit(gate_func, cc, proxy)] = cc
+
+        for future in as_completed(futures):
+            cc = futures[future]
+            processed += 1
+
+            try:
+                response_text, status = future.result()
+
+                res_obj = {
+                    'cc': cc,
+                    'response': response_text,
+                    'status': status,
+                    'gateway': gate_name,
+                    'price': 'N/A',
+                    'site_url': 'API'
+                }
+
+                if status == 'APPROVED':
+                    results['cooked'].append(res_obj)
+                    send_hit(bot, message.chat.id, res_obj, f"✅ {gate_name} HIT")
+                elif status == 'APPROVED_OTP':
+                    results['approved'].append(res_obj)
+                    send_hit(bot, message.chat.id, res_obj, f"⚠️ {gate_name} AUTH")
+                elif status == 'DECLINED':
+                    results['declined'].append(res_obj)
+                else:
+                    results['error'].append(res_obj)
+
+                if time.time() - last_update > 3:
+                    msg = (
+                        f"⚡ <b>{gate_name} Checking...</b>\n"
+                        f"{create_progress_bar(processed, total)}\n"
+                        f"<b>Progress:</b> {processed}/{total}\n"
+                        f"✅ <b>Live:</b> {len(results['cooked'])}\n"
+                        f"❌ <b>Dead:</b> {len(results['declined'])}\n"
+                        f"⚠️ <b>Error:</b> {len(results['error'])}"
+                    )
+                    try:
+                        bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+                        last_update = time.time()
+                    except:
+                        pass
+
+            except Exception as e:
+                print(f"Check Error for {cc}: {e}")
+                results['error'].append({'cc': cc, 'response': str(e), 'status': 'ERROR'})
+
+    duration = time.time() - start_time
+
+    # ----- 📁 Save approved and error cards to files -----
+    approved_list = [f"{res['cc']} : {res['response']}" for res in results['cooked'] + results['approved']]
+    error_list   = [f"{res['cc']} : {res['response']}" for res in results['error']]
+
+    approved_file = f"approved_{message.from_user.id}.txt"
+    error_file    = f"errors_{message.from_user.id}.txt"
+
+    if approved_list:
+        with open(approved_file, 'w') as f:
+            f.write("\n".join(approved_list))
+        with open(approved_file, 'rb') as f:
+            bot.send_document(message.chat.id, f, caption=f"✅ Approved cards ({len(approved_list)})")
+        os.remove(approved_file)
+
+    if error_list:
+        with open(error_file, 'w') as f:
+            f.write("\n".join(error_list))
+        with open(error_file, 'rb') as f:
+            bot.send_document(message.chat.id, f, caption=f"⚠️ Error cards ({len(error_list)})")
+        os.remove(error_file)
+
+    # ----- Final summary -----
+    final_msg = (
+        f"✅ <b>{gate_name} Completed</b>\n"
+        f"━━━━━━━━━━━━━━━━\n"
+        f"💳 <b>Total:</b> {total}\n"
+        f"✅ <b>Live:</b> {len(results['cooked'])}\n"
+        f"❌ <b>Dead:</b> {len(results['declined'])}\n"
+        f"⚠️ <b>Errors:</b> {len(results['error'])}\n"
+        f"⏱️ <b>Time:</b> {duration:.2f}s"
+    )
+
+    try:
+        bot.edit_message_text(final_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
+    except:
+        bot.send_message(message.chat.id, final_msg, parse_mode='HTML')
     # Helper for donation site testing (used in /stsite)
     def test_donation_site_like_script(site_url, pk, cc, proxy=None):
         """
@@ -1028,3 +1050,4 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
