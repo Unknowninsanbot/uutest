@@ -808,8 +808,17 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 )
                 return
 
+        # ✅ Send a status message first (this will be used for live updates)
+            start_msg = bot.send_message(
+                call.message.chat.id,
+                f"🔥 <b>Shopify Mass Check Started...</b>\n"
+                f"💳 Cards: {len(user_sessions[user_id]['ccs'])}\n"
+                f"🔌 Proxies: {len(proxies)}",
+                parse_mode='HTML'
+            )
+
             process_mass_check_engine(
-                bot, call.message, None,
+                bot, call.message, start_msg,  # <-- pass the message object, not None
                 user_sessions[user_id]['ccs'],
                 get_filtered_sites_func(),
                 proxies,
@@ -1149,4 +1158,5 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
