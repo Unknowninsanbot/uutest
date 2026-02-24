@@ -478,6 +478,15 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 if time.time() - last_update_time > 3 or processed == total:
                     update_ui(bot, message.chat.id, status_msg.message_id, processed, total, results)
                     last_update_time = time.time()
+                # ----- 📁 Save error cards to file (if any) -----
+        error_list = [f"{res['cc']} : {res['response']}" for res in results['error']]
+        if error_list:
+            error_file = f"error_cards_{message.from_user.id}.txt"
+            with open(error_file, 'w') as f:
+                f.write("\n".join(error_list))
+            with open(error_file, 'rb') as f:
+                bot.send_document(message.chat.id, f, caption=f"⚠️ Error cards ({len(error_list)})")
+            os.remove(error_file)
 
         duration = time.time() - start_time
         send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
@@ -1158,5 +1167,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
