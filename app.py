@@ -1331,23 +1331,42 @@ def get_filtered_sites():
 @check_access
 def send_welcome(message):
     help_text = """
-<b>🔥 Welcome to Nova Shopify CC Checker Bot! 🔥</b>
-
-<code>Available Commands:</code>
-• /sh CC|MM|YYYY|CVV - Check a card
-• /s CC|MM|YYYY|CVV - Short command for checking
-• .sh CC|MM|YYYY|CVV - Alternative command
-• .s CC|MM|YYYY|CVV - Alternative command
-• cook CC|MM|YYYY|CVV - Alternative command
-
-<code>Mass Check Commands:</code>
-• /msh CCs - Check multiple cards (max 1000)
-• .msh CCs - Alternative command
-• hardcook CCs - Alternative command
+🔥 <b>Nova Shopify CC Checker Bot</b> 🔥
 
 ━━━━━━━━━━━━━━━━━━━
-<b>Bot By:</b> <a href="tg://user?id={DARKS_ID}">⏤‌‌Unknownop ꯭𖠌</a>
+<b>🔹 Single Card Check</b>
+Use any of these commands:
+• <code>/sh CC|MM|YYYY|CVV</code>
+• <code>/s CC|MM|YYYY|CVV</code>
+• <code>.sh CC|MM|YYYY|CVV</code>
+• <code>.s CC|MM|YYYY|CVV</code>
+• <code>cook CC|MM|YYYY|CVV</code>
+
+━━━━━━━━━━━━━━━━━━━
+<b>🔸 Mass Check (Multiple Cards)</b>
+• <code>/msh [cards]</code>
+• <code>.msh [cards]</code>
+• <code>hardcook [cards]</code>
+
+⚠️ <b>IMPORTANT:</b> Mass check <u>requires working proxies</u>.  
+If you don't add proxies, the check will fail.
+
+<b>How to add proxies:</b>
+• Upload a <code>.txt</code> file containing your proxies (one per line)  
+• Or use <code>/addproxy ip:port:user:pass</code> to add one by one
+
+<b>Manage your proxies:</b>
+• <code>/myproxies</code> – list your saved proxies  
+• <code>/clearproxies</code> – delete all your proxies
+
+━━━━━━━━━━━━━━━━━━━
+<b>❓ Need approval?</b>  
+If you see "Access Denied", ask the owner to add you.
+
+<b>👤 Owner:</b> <a href="tg://user?id={DARKS_ID}">⏤‌‌Unknownop ꯭𖠌</a>  
+📞 Contact: @Unknown_bolte
 """.format(DARKS_ID=DARKS_ID)
+
     bot.reply_to(message, help_text, parse_mode='HTML')
 
 @bot.message_handler(commands=['help'])
