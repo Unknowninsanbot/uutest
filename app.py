@@ -3706,16 +3706,19 @@ def get_filtered_sites():
 
 setup_complete_handler(
     bot,
-    get_filtered_sites,
-    proxies_data,
-    check_site_shopify_direct,
-    is_valid_response,
-    process_response_shopify,
-    update_stats,
-    save_json,
-    is_user_allowed
+    get_filtered_sites,           # your function that returns sites list
+    proxies_data,                  # dict with 'proxies' list
+    check_site_shopify_direct,     # we defined it inside, but you can pass None to use internal
+    is_valid_response,             # your function
+    process_response_shopify,      # your function
+    update_stats,                  # your function
+    save_json,                     # your function
+    is_user_allowed,               # your function (checks approved users)
+    OWNER_ID,                      # list of owner IDs
+    DARKS_ID,                      # your owner ID for footer
+    user_proxies_data,             # persistent dict loaded from USER_PROXIES_FILE
+    USER_PROXIES_FILE               # path string
 )
-
 def is_valid_response(api_response):
     """
     Simple validation - check if response exists and has required fields
