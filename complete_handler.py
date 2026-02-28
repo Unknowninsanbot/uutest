@@ -98,7 +98,7 @@ def create_progress_bar(processed, total, length=15):
     return f"<code>{'█' * filled_length}{'░' * (length - filled_length)}</code> {int(percent * 100)}%"
 
 def validate_proxies_strict(proxies, bot, message):
-    """Test proxies and return live ones"""
+    """Test proxies and return live ones (with error handling for edits)"""
     live_proxies = []
     total = len(proxies)
     status_msg = bot.reply_to(message, f"🛡️ <b>Verifying {total} Proxies...</b>", parse_mode='HTML')
@@ -133,6 +133,7 @@ def validate_proxies_strict(proxies, bot, message):
                     )
                     last_ui_update = time.time()
                 except:
+                    # Message may have been deleted – ignore
                     pass
     try:
         bot.delete_message(message.chat.id, status_msg.message_id)
@@ -482,6 +483,7 @@ def setup_complete_handler(
             )
             bot.send_message(chat_id, msg, parse_mode='HTML')
         except Exception as e:
+            # Fallback if any formatting fails
             bot.send_message(chat_id, f"{title}\n{res['cc']}\n{res['response']}")
 
     # ==========================================================================
@@ -586,6 +588,7 @@ def setup_complete_handler(
 """
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
+            # Message may have been deleted – ignore
             pass
 
     def send_final(bot, chat_id, mid, total, results, duration):
@@ -601,6 +604,7 @@ def setup_complete_handler(
         try:
             bot.edit_message_text(msg, chat_id, mid, parse_mode='HTML')
         except:
+            # If editing fails, send as new message
             bot.send_message(chat_id, msg, parse_mode='HTML')
 
     # ==========================================================================
