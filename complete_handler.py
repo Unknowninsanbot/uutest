@@ -519,17 +519,17 @@ def setup_complete_handler(
                 f"┏━━━━━━━⍟\n"
                 f"┃ {title}\n"
                 f"┗━━━━━━━━━━━⊛\n\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐂𝐚𝐫𝐝</b>↣<code>{cc}</code>\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐆𝐚𝐭𝐞𝐰𝐚𝐲</b>↣{res['gateway']} [${res['price']}]\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞</b>↣ <code>{res['response']}</code>\n"
+                f"[⌬]<b>𝐂𝐚𝐫𝐝</b>↣<code>{cc}</code>\n"
+                f"[⌬]<b>𝐆𝐚𝐭𝐞𝐰𝐚𝐲</b>↣{res['gateway']} [${res['price']}]\n"
+                f"[⌬]<b>𝐑𝐞𝐬𝐩𝐨𝐧𝐬𝐞</b>↣ <code>{res['response']}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐁𝐫𝐚𝐧𝐝</b>↣{bin_info.get('brand', 'UNKNOWN')} {bin_info.get('type', 'UNKNOWN')}\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐁𝐚𝐧𝐤</b>↣{bin_info.get('bank', 'UNKNOWN')}\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐂𝐨𝐮𝐧𝐭𝐫𝐲</b>↣{bin_info.get('country_name', 'UNKNOWN')} {bin_info.get('country_flag', '🇺🇳')}\n"
+                f"[⌬]<b>𝐁𝐫𝐚𝐧𝐝</b>↣{bin_info.get('brand', 'UNKNOWN')} {bin_info.get('type', 'UNKNOWN')}\n"
+                f"[⌬]<b>𝐁𝐚𝐧𝐤</b>↣{bin_info.get('bank', 'UNKNOWN')}\n"
+                f"[⌬]<b>𝐂𝐨𝐮𝐧𝐭𝐫𝐲</b>↣{bin_info.get('country_name', 'UNKNOWN')} {bin_info.get('country_flag', '🇺🇳')}\n"
                 f"━━━━━━━━━━━━━━━━━━━\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐑𝐞𝐪𝐮𝐞𝐬𝐭 𝐁𝐲</b>↣ <a href=\"tg://user?id={user_obj.id}\">{safe_name}</a>\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐁𝐨𝐭 𝐁𝐲</b>↣ <a href=\"tg://user?id={DARKS_ID}\">⏤‌‌Unknownop ꯭𖠌</a>\n"
-                f"[⌬](https://t.me/Nova_bot_update) <b>𝐏𝐫𝐨𝐱𝐲</b>↣Shining 🔆\n"
+                f"[⌬]<b>𝐑𝐞𝐪𝐮𝐞𝐬𝐭 𝐁𝐲</b>↣ <a href=\"tg://user?id={user_obj.id}\">{safe_name}</a>\n"
+                f"[⌬]<b>𝐁𝐨𝐭 𝐁𝐲</b>↣ <a href=\"tg://user?id={DARKS_ID}\">⏤‌‌Unknownop ꯭𖠌</a>\n"
+                f"[⌬]<b>Owner</b>↣@Unknown_bolte\n"
             )
             bot.send_message(chat_id, msg, parse_mode='HTML')
         except Exception as e:
@@ -725,3 +725,4 @@ def setup_complete_handler(
             pass
 
     return
+
